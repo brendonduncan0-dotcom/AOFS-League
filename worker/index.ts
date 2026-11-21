@@ -112,6 +112,25 @@ const failed = (err: unknown, what: string) => {
   return json({ error: "Something went wrong on our side." }, 500)
 }
 
+/** Seasons compare ignoring case and extra spaces. */
+const seasonKey = (season: string) => season.trim().replace(/\s+/g, " ").toLowerCase()
+export const seasonTaken = (season: string) => `There's already a league for the ${season} season.`
+
+/**
+ * Seasons (as seasonKey) already used by a league: every league note on the deploy branch,
+ * plus new leagues still waiting to be merged (their create-league/* branches).
+ */
+async function seasonsInUse(gh: GitHub): Promise<Set<string>> {
+  const live = (await gh.folders("content/Leagues")).map((f) => gh.file(`content/Leagues/${f}/${f}.md`))
+  const pending = (await gh.branches("create-league/")).map((branch) => {
+    const n = branch.match(/^create-league\/league-(\d+)$/)?.[1]
+    return n ? gh.file(`content/Leagues/League ${n}/League ${n}.md`, branch) : Promise.resolve(null)
+  })
+  const notes = await Promise.all([...live, ...pending])
+  const seasons = notes.map((note) => (note === null ? undefined : frontmatterValue(note, "season")))
+  return new Set(seasons.filter((s): s is string => !!s).map(seasonKey))
+}
+
 /** The highest N among folders named "League N" (0 if none). Other folder names are ignored. */
 const highestLeagueNumber = (folders: string[]) =>
   Math.max(0, ...folders.map((f) => Number(f.match(/^League ([1-9]\d{0,5})$/)?.[1] ?? 0)))
@@ -132,6 +151,8 @@ export async function createLeague(
     const season = typeof body?.season === "string" ? body.season.trim().replace(/\s+/g, " ") : ""
     if (!season) throw new UserError("Please enter a season name.")
     if (!SEASON.test(season)) throw new UserError(SEASON_ERROR)
+    const taken = await seasonsInUse(gh)
+    if (taken.has(seasonKey(season))) throw new UserError(seasonTaken(season), 409)
 
     const template = await gh.file("content/templates/League.md")
     if (template === null) throw new Error("content/templates/League.md is missing")
@@ -146,7 +167,7 @@ export async function createLeague(
         break
       }
     }
-    if (number === undefined) throw new UserError("Too many new leagues are waiting for approval. Please try again later.", 409)
+    if (number === undefined) throw new UserError("Too many new leagues are waiting for approval. Please try again later.", 429)
 
     const name = `League ${number}`
     const branch = `create-league/league-${number}`
@@ -325,8 +346,10 @@ export function turnstile(env: Env, fetchImpl: typeof fetch = fetch): Verifier {
 // --- GitHub REST API -------------------------------------------------------------------------
 
 export type GitHub = {
-  /** File contents on the deploy branch, or null if it doesn't exist. */
-  file(path: string): Promise<string | null>
+  /** File contents on the deploy branch (or another branch), or null if it doesn't exist. */
+  file(path: string, branch?: string): Promise<string | null>
+  /** Names of branches starting with a prefix, e.g. "create-league/". */
+  branches(prefix: string): Promise<string[]>
   /** File names in a folder on the deploy branch ([] if the folder doesn't exist). */
   list(path: string): Promise<string[]>
   /** Subfolder names in a folder on the deploy branch ([] if the folder doesn't exist). */
@@ -370,12 +393,20 @@ export function github(env: Env, fetchImpl: typeof fetch = fetch): GitHub {
   }
 
   return {
-    async file(path) {
-      const res = await api("GET", `/contents/${encodePath(path)}?${ref}`)
+    async file(path, branch) {
+      const at = branch ? `ref=${encodeURIComponent(branch)}` : ref
+      const res = await api("GET", `/contents/${encodePath(path)}?${at}`)
       if (res.status === 404) return null
       if (!res.ok) await fail(`read ${path}`, res)
       const data = (await res.json()) as { content?: string }
       return b64decode(data.content ?? "")
+    },
+    async branches(prefix) {
+      // matching-refs is a plain prefix match; ask without the trailing "/" and filter here
+      const res = await api("GET", `/git/matching-refs/heads/${encodePath(prefix.replace(/\/+$/, ""))}`)
+      if (!res.ok) await fail(`list branches ${prefix}`, res)
+      const refs = (await res.json()) as { ref: string }[]
+      return refs.map((r) => r.ref.replace(/^refs\/heads\//, "")).filter((b) => b.startsWith(prefix))
     },
     async list(path) {
       return (await entries(path)).filter((e) => e.type === "file").map((e) => e.name)

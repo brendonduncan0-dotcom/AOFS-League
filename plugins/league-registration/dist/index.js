@@ -200,6 +200,11 @@ const clientScript = `
     [...document.querySelectorAll("h2#registered-players + .bases-page tbody a, h2#leaderboard + .bases-page tbody a")]
       .map((a) => a.textContent.trim().toLowerCase())
 
+  // seasons of the leagues on the homepage cards (the Worker also checks leagues awaiting approval)
+  const seasonsInUse = () =>
+    [...document.querySelectorAll('.bases-card-row[data-property="season"] .bases-card-value')]
+      .map((v) => clean(v.textContent).toLowerCase())
+
   /** Each field's check: an error message, or null if it's OK. */
   const CHECKS = {
     name: (value) => {
@@ -214,6 +219,8 @@ const clientScript = `
       value = clean(value)
       if (!value) return "Please enter a season name."
       if (!SEASON.test(value)) return "Season names can use letters, numbers, spaces and - ' . , & ( ) / (max 60)."
+      // same wording as the Worker (worker/index.ts seasonTaken)
+      if (seasonsInUse().includes(value.toLowerCase())) return "There's already a league for the " + value + " season."
       return null
     },
   }
@@ -222,7 +229,7 @@ const clientScript = `
   const FORMS = {
     register: {
       input: "name",
-      fieldErrorStatus: 409, // name taken, or already waiting for approval
+      fieldErrorStatus: [409], // name taken, or already waiting for approval
       body: (v, root) => ({ league: root.dataset.league, name: clean(v.name), armyLink: v.armyLink.trim() }),
       notConnected: (v) => "Thanks, " + clean(v.name) + "! Online registration isn't connected yet, so please let the organiser know you'd like to join.",
       sending: "Registering…",
@@ -231,7 +238,7 @@ const clientScript = `
     },
     create: {
       input: "season",
-      fieldErrorStatus: 400, // season name rejected
+      fieldErrorStatus: [400, 409], // season name rejected, or already used
       body: (v) => ({ season: clean(v.season) }),
       notConnected: () => "Creating leagues online isn't connected yet, so please ask the organiser to set it up.",
       sending: "Creating league…",
@@ -365,7 +372,7 @@ const clientScript = `
           showVerifyMessage(slot, message)
           return say(FIX, "error")
         }
-        if (res.status === config.fieldErrorStatus) {
+        if (config.fieldErrorStatus.includes(res.status)) {
           const input = form.querySelector("input[name=" + config.input + "]")
           showFieldMessage(input, message, "error")
           input.focus()

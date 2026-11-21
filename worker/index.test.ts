@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs"
 import worker, {
   ARMY_LINK_ERRORS,
   SEASON_ERROR,
+  seasonTaken,
   checkArmyLink,
   createLeague,
   frontmatterValue,
@@ -27,12 +28,20 @@ const template = readFileSync("content/templates/Player.md", "utf8")
 const upcomingLeague = "---\ntitle: League 2\nstatus: Upcoming\nrounds: 3\ncurrent_round: 0\nregistration_open: true\n---\n"
 
 /** In-memory GitHub: files on the deploy branch, branches, and what the Worker wrote. */
-function fakeGitHub(files: Record<string, string>, branches: string[] = []) {
+function fakeGitHub(
+  files: Record<string, string>,
+  branches: string[] = [],
+  /** files on other branches: { branch: { path: content } } */
+  branchFiles: Record<string, Record<string, string>> = {},
+) {
   const written: { path: string; content: string; branch: string }[] = []
   const prs: { branch: string; title: string }[] = []
   const gh: GitHub = {
-    async file(p) {
-      return files[p] ?? null
+    async file(p, branch) {
+      return (branch ? branchFiles[branch]?.[p] : files[p]) ?? null
+    },
+    async branches(prefix) {
+      return branches.filter((b) => b.startsWith(prefix))
     },
     async list(dir) {
       return Object.keys(files)
@@ -323,8 +332,13 @@ const leagueFiles = (): Record<string, string> => ({
   "content/templates/League.md": leagueTemplate,
 })
 
-async function create(body: any, files = leagueFiles(), branches: string[] = []) {
-  const fake = fakeGitHub(files, branches)
+async function create(
+  body: any,
+  files = leagueFiles(),
+  branches: string[] = [],
+  branchFiles: Record<string, Record<string, string>> = {},
+) {
+  const fake = fakeGitHub(files, branches, branchFiles)
   const withToken = body && typeof body === "object" ? { turnstileToken: "ok", ...body } : body
   const req = new Request("https://site.example/api/leagues", { method: "POST", body: JSON.stringify(withToken) })
   const res = await createLeague(req, env, fake.gh, verifyOk)
@@ -382,4 +396,27 @@ test("league creation needs a valid Turnstile token", async () => {
 test("routes POST /api/leagues", async () => {
   const res = await worker.fetch(new Request("https://site.example/api/leagues"), env)
   assert.equal(res.status, 405)
+})
+
+test("rejects a season name that's already used, ignoring case and spaces", async () => {
+  const files = {
+    ...leagueFiles(),
+    "content/Leagues/League 1/League 1.md": upcomingLeague.replace("title: League 2", 'title: League 1\nseason: "2026 Christmas"'),
+  }
+  for (const season of ["2026 Christmas", "  2026   christmas "]) {
+    const r = await create({ season }, files)
+    assert.equal(r.status, 409, season)
+    assert.equal(r.body.error, seasonTaken(season.trim().replace(/\s+/g, " ")))
+    assert.equal(r.branches.length, 0)
+  }
+  const ok = await create({ season: "2026 Christmas Cup" }, files)
+  assert.equal(ok.status, 200)
+})
+
+test("rejects a season used by a league still waiting for approval", async () => {
+  const pending = "create-league/league-3"
+  const branchFiles = { [pending]: { "content/Leagues/League 3/League 3.md": '---\ntitle: League 3\nseason: "Winter"\n---\n' } }
+  const r = await create({ season: "WINTER" }, leagueFiles(), [pending], branchFiles)
+  assert.equal(r.status, 409)
+  assert.deepEqual(r.branches, [pending]) // no new branch
 })
