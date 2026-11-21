@@ -1,0 +1,13 @@
+// Cloudflare Workers config: serves the Quartz build output (public/) as a static site.
+// Build: npx quartz build   Deploy: npx wrangler deploy
+{
+  "name": "aofs-league",
+  "compatibility_date": "2026-11-21",
+  "assets": {
+    "directory": "./public",
+    // /leagues/league-1 serves league-1.html; folders serve their index.html
+    "html_handling": "auto-trailing-slash",
+    // unknown addresses get Quartz's 404 page
+    "not_found_handling": "404-page"
+  }
+}

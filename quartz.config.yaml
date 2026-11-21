@@ -1,14 +1,13 @@
 # yaml-language-server: $schema=./quartz/plugins/quartz-plugins.schema.json
 configuration:
-  pageTitle: Quartz 5
+  pageTitle: AOFS League
   pageTitleSuffix: ""
   enableSPA: true
   enablePopovers: true
   prefetch: viewport
-  analytics:
-    provider: plausible
+  analytics: null
   locale: en-US
-  baseUrl: quartz.jzhao.xyz
+  baseUrl: aofs-league.brendonduncan0.workers.dev
   ignorePatterns:
     - private
     - templates
