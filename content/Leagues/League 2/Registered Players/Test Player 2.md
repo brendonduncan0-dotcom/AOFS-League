@@ -5,7 +5,7 @@ status: active
 army:
 rank: 1
 rank_label: "1 - tied"
-position: 4
+position: 5
 avg_vp: 0
 games: 0
 vp_total: 0

@@ -6,7 +6,7 @@ joined_round: 1
 army:
 rank: 1
 rank_label: "1 - tied"
-position: 2
+position: 3
 avg_vp: 0
 games: 0
 vp_total: 0
