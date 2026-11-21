@@ -7,7 +7,7 @@ rounds: 3
 current_round: 0
 registration_open: true
 winner:
-player_count: 2
+player_count: 0
 tags:
   - league
 ---
