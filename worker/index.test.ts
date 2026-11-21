@@ -57,7 +57,11 @@ const verifyOk = async (token: string) => token === "ok"
 
 async function call(body: any, files = baseFiles(), branches: string[] = []) {
   const fake = fakeGitHub(files, branches)
-  const withToken = body && typeof body === "object" && !("turnstileToken" in body) ? { ...body, turnstileToken: "ok" } : body
+  // fill in a valid token and army link unless the test sets them
+  const withToken =
+    body && typeof body === "object"
+      ? { turnstileToken: "ok", armyLink: "https://army-forge.onepagerules.com/share?id=Default", ...body }
+      : body
   const res = await register(post(withToken), env, fake.gh, verifyOk)
   return { status: res.status, body: (await res.json()) as Record<string, string>, ...fake }
 }
@@ -207,10 +211,13 @@ test("stores the Army Forge link in the army property", async () => {
   assert.equal(frontmatterValue(r.written[0].content, "army"), ARMY)
 })
 
-test("army link is optional", async () => {
-  const r = await call({ league: "Leagues/League 2", name: "Alex", armyLink: "" })
-  assert.equal(r.status, 200)
-  assert.equal(frontmatterValue(r.written[0].content, "army") ?? "", "")
+test("army link is required", async () => {
+  for (const armyLink of ["", "   ", undefined, null]) {
+    const r = await call({ league: "Leagues/League 2", name: "Alex", armyLink })
+    assert.equal(r.status, 400, String(armyLink))
+    assert.equal(r.body.error, ARMY_LINK_ERRORS.missing)
+    assert.equal(r.written.length, 0)
+  }
 })
 
 test("army link must be an Army Forge share link, with a message for each mistake", async () => {

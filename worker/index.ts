@@ -2,7 +2,7 @@
  * AOFS League Worker.
  *
  * Serves the static site (Quartz build in public/) and handles the site's API:
- *   POST /api/register   { league: "Leagues/League 2", name: "Alex", armyLink?: "https://army-forge…",
+ *   POST /api/register   { league: "Leagues/League 2", name: "Alex", armyLink: "https://army-forge…",
  *                          turnstileToken: "…" }
  *     -> opens a GitHub pull request adding Leagues/League 2/Registered Players/Alex.md
  *
@@ -25,11 +25,12 @@ export interface Env {
 const NAME = /^[\p{L}\p{N}][\p{L}\p{N} '\-.]{0,39}$/u
 /** League folders live directly under Leagues/, e.g. "Leagues/League 2". */
 /**
- * Army Forge share links only (optional field): https://army-forge.onepagerules.com/share?id=…
+ * Army Forge share links only (required): https://army-forge.onepagerules.com/share?id=…
  * Other Army Forge pages (e.g. the builder) only work for the person who made the list.
- * Returns the cleaned URL ("" if none given) or a message explaining what's wrong.
+ * Returns the cleaned URL, or a message explaining what's wrong.
  */
 export const ARMY_LINK_ERRORS = {
+  missing: "Please enter your army link.",
   site: "That isn't an Army Forge link.",
   builder: "That's your builder link, which only works for you.",
   view: "That's a viewer link, which others can't open.",
@@ -38,10 +39,10 @@ export const ARMY_LINK_ERRORS = {
   long: "That link is too long.",
 }
 export function checkArmyLink(value: unknown): { url: string } | { error: string } {
-  if (value === undefined || value === null) return { url: "" }
+  if (value === undefined || value === null) return { error: ARMY_LINK_ERRORS.missing }
   if (typeof value !== "string") return { error: ARMY_LINK_ERRORS.site }
   const raw = value.trim()
-  if (raw === "") return { url: "" }
+  if (raw === "") return { error: ARMY_LINK_ERRORS.missing }
   if (raw.length > 500) return { error: ARMY_LINK_ERRORS.long }
   let url: URL
   try {
