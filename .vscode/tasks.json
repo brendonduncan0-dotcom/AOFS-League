@@ -6,12 +6,21 @@
       "detail": "Build the site and serve it at http://localhost:8080 with live reload",
       "type": "shell",
       "command": "npx quartz build --serve",
-      "group": { "kind": "build", "isDefault": true },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
       "isBackground": true,
-      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "clear": true
+      },
       "problemMatcher": {
         "owner": "quartz",
-        "pattern": { "regexp": "^__never_matches__$" },
+        "pattern": {
+          "regexp": "^__never_matches__$"
+        },
         "background": {
           "activesBegin": "Quartz v",
           "beginsPattern": "Quartz v",
@@ -23,9 +32,17 @@
       "label": "Commit & Push",
       "detail": "Stage all changes, commit with a message, and push to GitHub",
       "type": "shell",
-      "command": "git add -A && git status --short && if git diff --cached --quiet; then echo 'Nothing new to commit.'; else git commit -m \"$COMMIT_MSG\"; fi && git push -u origin HEAD",
-      "options": { "env": { "COMMIT_MSG": "${input:commitMessage}" } },
-      "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+      "command": "git add -A && git status --short && if git diff --cached --quiet; then echo 'Nothing new to commit.'; else git commit -m \"$COMMIT_MSG\"; fi && echo 'Pulling latest changes from GitHub...' && { git pull --rebase origin \"$(git branch --show-current)\" || { echo 'Pull stopped on a conflict: nothing was pushed. Resolve the conflict and run git rebase --continue, or undo the pull with git rebase --abort.'; exit 1; }; } && git push -u origin HEAD",
+      "options": {
+        "env": {
+          "COMMIT_MSG": "${input:commitMessage}"
+        }
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
       "problemMatcher": []
     }
   ],

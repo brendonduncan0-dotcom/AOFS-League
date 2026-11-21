@@ -23,6 +23,15 @@
     "GITHUB_REPO": "brendonduncan0-dotcom/AOFS-League",
     "GITHUB_BRANCH": "v5"
   },
+  // Preview builds (pull request branches, `wrangler preview`) use these instead. Previews get
+  // no secrets, so the registration API fails closed there: previews are for checking how the
+  // site looks, and can't open real pull requests.
+  "previews": {
+    "vars": {
+      "GITHUB_REPO": "brendonduncan0-dotcom/AOFS-League",
+      "GITHUB_BRANCH": "v5"
+    }
+  },
   // request logs for the Worker (Cloudflare dashboard -> Observability)
   "observability": { "enabled": true }
 }

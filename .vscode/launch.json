@@ -6,10 +6,15 @@
       "type": "node",
       "request": "launch",
       "program": "${workspaceFolder}/quartz/bootstrap-cli.mjs",
-      "args": ["build", "--serve"],
+      "args": [
+        "build",
+        "--serve"
+      ],
       "cwd": "${workspaceFolder}",
       "console": "integratedTerminal",
-      "skipFiles": ["<node_internals>/**"],
+      "skipFiles": [
+        "<node_internals>/**"
+      ],
       "serverReadyAction": {
         "pattern": "listening at https?://localhost:([0-9]+)",
         "uriFormat": "http://localhost:%s",
@@ -20,9 +25,11 @@
       "name": "Commit & Push",
       "type": "node-terminal",
       "request": "launch",
-      "command": "git add -A && git status --short && if git diff --cached --quiet; then echo 'Nothing new to commit.'; else git commit -m \"$COMMIT_MSG\"; fi && git push -u origin HEAD",
+      "command": "git add -A && git status --short && if git diff --cached --quiet; then echo 'Nothing new to commit.'; else git commit -m \"$COMMIT_MSG\"; fi && echo 'Pulling latest changes from GitHub...' && { git pull --rebase origin \"$(git branch --show-current)\" || { echo 'Pull stopped on a conflict: nothing was pushed. Resolve the conflict and run git rebase --continue, or undo the pull with git rebase --abort.'; exit 1; }; } && git push -u origin HEAD",
       "cwd": "${workspaceFolder}",
-      "env": { "COMMIT_MSG": "${input:commitMessage}" }
+      "env": {
+        "COMMIT_MSG": "${input:commitMessage}"
+      }
     }
   ],
   "inputs": [
