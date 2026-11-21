@@ -4,6 +4,12 @@
  * Usage: npm run pair -- "League 2"          close the current round, create the next pairings
  *        npm run pair -- "League 2" --dry    show what would happen, write nothing
  *
+ * Options used by the website's league controls (.github/workflows/advance.yaml):
+ *   --strict             refuse (exit 1) if any pairing in the current round has no result,
+ *                        instead of marking it unplayed
+ *   --expect-round N     only go ahead if the league's current_round is N; otherwise someone
+ *                        already advanced it, so do nothing (exit 0)
+ *
  * League note properties used:
  *   rounds         total rounds in the league; leave blank before the league starts and it is
  *                  set when round 1 is drawn, from the players taking part (see swissRounds)
@@ -47,7 +53,11 @@ import {
 
 const args = process.argv.slice(2)
 const DRY_RUN = args.includes("--dry")
-const leagueName = args.find((a) => !a.startsWith("--"))
+const STRICT = args.includes("--strict")
+const expectIdx = args.indexOf("--expect-round")
+const EXPECT_ROUND = expectIdx >= 0 ? Number(args[expectIdx + 1]) : undefined
+if (EXPECT_ROUND !== undefined && !Number.isInteger(EXPECT_ROUND)) throw new Error("--expect-round needs a round number")
+const leagueName = args.find((a, i) => !a.startsWith("--") && args[i - 1] !== "--expect-round")
 if (!leagueName) {
   console.error('Usage: npm run pair -- "<League name>" [--dry]')
   process.exit(1)
@@ -55,8 +65,17 @@ if (!leagueName) {
 
 const league = readLeague(path.join(LEAGUES_DIR, leagueName))
 const where = rel(league.noteFile)
+if (league.completed && EXPECT_ROUND !== undefined) {
+  // finishing doesn't change current_round, so a second "Finish league" lands here
+  console.log(`${where}: league is already Completed. Nothing to do.`)
+  process.exit(0)
+}
 if (league.completed) throw new Error(`${where}: league is already Completed`)
 const current = league.currentRound
+if (EXPECT_ROUND !== undefined && current !== EXPECT_ROUND) {
+  console.log(`${where}: current_round is ${current}, not ${EXPECT_ROUND}; it was already advanced. Nothing to do.`)
+  process.exit(0)
+}
 // rounds is blank until the league starts: round 1 sets it from the players taking part
 const roundsBlank = league.data.rounds === undefined || league.data.rounds === null || league.data.rounds === ""
 let totalRounds: number
@@ -79,6 +98,7 @@ if (current >= 1) {
     .filter((p) => p.round === current && !reported.has(pairKey(p.a, p.b)))
     .map((p) => `${p.a} vs ${p.b}`)
   console.log(`\nClosing round ${current} of ${totalRounds}.`)
+  if (unplayed.length && STRICT) throw new Error(`${where}: waiting for results: ${unplayed.join(", ")}`)
   if (unplayed.length) console.warn(`  ⚠ No result for: ${unplayed.join(", ")} (marked unplayed: a bye for both players)`)
   else console.log("  All pairings have results.")
 }

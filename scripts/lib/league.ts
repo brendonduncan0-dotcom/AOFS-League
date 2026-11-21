@@ -374,6 +374,23 @@ export function printStandings(title: string, table: Stats[]) {
 /** Defaults every player note should have; added only when missing (never overwritten). */
 const PLAYER_DEFAULTS: Record<string, string | number> = { status: "active", joined_round: 1 }
 
+/**
+ * The round a player registering now would join from, or undefined if registration is closed.
+ * Same rule as the Worker (worker/index.ts registrationRound) and the registration form:
+ * `registration_open: true`, and the league is Upcoming (round 1) or Active with rounds still
+ * to pair (the next round; the current round is already paired).
+ */
+export function registrationRound(data: Record<string, unknown>): number | undefined {
+  if (String(data.registration_open).toLowerCase() !== "true") return undefined
+  const status = String(data.status ?? "").toLowerCase()
+  if (status === "upcoming") return 1
+  if (status !== "active") return undefined
+  const current = Number(data.current_round)
+  const rounds = Number(data.rounds)
+  if (!Number.isInteger(current) || !Number.isInteger(rounds) || current >= rounds) return undefined
+  return current + 1
+}
+
 /** League-level totals written to the league note (e.g. player_count, shown on the homepage cards). */
 export function writeLeagueSummary(league: League) {
   writeFrontmatter(league.noteFile, { player_count: league.players.size })

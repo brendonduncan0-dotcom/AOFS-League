@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { pairKey, pairingState, shuffle, swissPair, swissRounds } from "./lib/league.ts"
+import { pairKey, pairingState, registrationRound, shuffle, swissPair, swissRounds } from "./lib/league.ts"
 
 const meetingsOf = (...pairs: [string, string][]) => {
   const m = new Map<string, number>()
@@ -126,4 +126,14 @@ test("if every player is protected, the normal bye rule still applies", () => {
 test("swissRounds: enough rounds for a single unbeaten player", () => {
   const cases: [number, number][] = [[1, 1], [2, 1], [3, 2], [4, 2], [5, 3], [8, 3], [9, 4], [16, 4], [17, 5]]
   for (const [players, rounds] of cases) assert.equal(swissRounds(players), rounds, `${players} players`)
+})
+
+test("registrationRound: the round a new player joins from, or undefined when closed", () => {
+  const open = { registration_open: true }
+  assert.equal(registrationRound({ ...open, status: "Upcoming", current_round: 0 }), 1)
+  assert.equal(registrationRound({ ...open, status: "Active", current_round: 1, rounds: 3 }), 2)
+  assert.equal(registrationRound({ ...open, status: "Active", current_round: 3, rounds: 3 }), undefined)
+  assert.equal(registrationRound({ ...open, status: "Completed", current_round: 3, rounds: 3 }), undefined)
+  assert.equal(registrationRound({ registration_open: false, status: "Upcoming", current_round: 0 }), undefined)
+  assert.equal(registrationRound({ status: "Upcoming", current_round: 0 }), undefined)
 })

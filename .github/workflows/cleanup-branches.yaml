@@ -1,0 +1,26 @@
+name: Clean up website branches
+
+# The Worker opens a branch + pull request for each registration (register/*) and each new
+# league (create-league/*). Merged ones delete their branch when they merge; this deletes the
+# branch when one is closed without merging (declined, or abandoned after a failed check).
+# Otherwise the branch would stay, and that name would be "already waiting for approval" forever.
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  delete-branch:
+    name: Delete branch
+    if: >-
+      github.event.pull_request.merged == false &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      (startsWith(github.head_ref, 'register/') || startsWith(github.head_ref, 'create-league/'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: ${{ github.head_ref }}
+    steps:
+      - run: gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/${BRANCH}" || echo "Branch already gone."

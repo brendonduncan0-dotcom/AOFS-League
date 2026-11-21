@@ -6,6 +6,12 @@
       "resolved": "../../plugins/league-registration",
       "commit": "local",
       "installedAt": "2026-11-21T01:45:29.239Z"
+    },
+    "league-controls": {
+      "source": "./plugins/league-controls",
+      "resolved": "../../plugins/league-controls",
+      "commit": "local",
+      "installedAt": "2026-11-21T05:50:00.000Z"
     }
   }
 }

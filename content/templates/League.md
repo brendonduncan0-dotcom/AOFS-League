@@ -144,3 +144,8 @@ views:
       - player_b
       - status
 ```
+
+## League controls
+
+```league-controls
+```

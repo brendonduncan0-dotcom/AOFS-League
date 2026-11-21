@@ -286,18 +286,21 @@ const clientScript = `
   }
 
   // --- Cloudflare Turnstile (explicit rendering, so it works with Quartz's SPA navigation) ---
-  const TURNSTILE_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=__leagueFormsTurnstile"
+  const TURNSTILE_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
   const renderWidgets = () => {
     const slots = document.querySelectorAll(".league-registration-turnstile:not([data-widget-id])")
     if (!slots.length) return
     if (!window.turnstile) {
-      if (!document.querySelector('script[src^="https://challenges.cloudflare.com/turnstile/"]')) {
-        const s = document.createElement("script")
-        s.src = TURNSTILE_SRC
-        s.async = true
-        document.head.appendChild(s)
+      // the league controls may have added the script already: wait for whichever tag exists
+      let script = document.querySelector('script[src^="https://challenges.cloudflare.com/turnstile/"]')
+      if (!script) {
+        script = document.createElement("script")
+        script.src = TURNSTILE_SRC
+        script.async = true
+        document.head.appendChild(script)
       }
-      return // renderWidgets runs again from the onload callback
+      script.addEventListener("load", renderWidgets, { once: true })
+      return
     }
     for (const slot of slots) {
       slot.dataset.widgetId = window.turnstile.render(slot, {
@@ -308,7 +311,6 @@ const clientScript = `
       })
     }
   }
-  window.__leagueFormsTurnstile = renderWidgets
   document.addEventListener("nav", renderWidgets)
   renderWidgets()
 

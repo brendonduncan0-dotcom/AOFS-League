@@ -7,6 +7,9 @@
  *     -> opens a GitHub pull request adding Leagues/League 2/Registered Players/Alex.md
  *   POST /api/leagues    { season: "2027 Summer", turnstileToken: "…" }
  *     -> opens a GitHub pull request adding Leagues/League N/League N.md (the next free number)
+ *   POST /api/advance    { league: "Leagues/League 2", turnstileToken: "…" }
+ *     -> starts .github/workflows/advance.yaml, which draws the league's next round (or
+ *        finishes it) and pushes to the deploy branch
  *
  * Configuration (wrangler.jsonc):
  *   vars.GITHUB_REPO     "owner/repo"
@@ -78,6 +81,10 @@ export default {
       if (request.method !== "POST") return json({ error: "Use POST" }, 405)
       return register(request, env)
     }
+    if (url.pathname === "/api/advance") {
+      if (request.method !== "POST") return json({ error: "Use POST" }, 405)
+      return advanceLeague(request, env)
+    }
     if (url.pathname === "/api/leagues") {
       if (request.method !== "POST") return json({ error: "Use POST" }, 405)
       return createLeague(request, env)
@@ -110,6 +117,103 @@ const failed = (err: unknown, what: string) => {
   if (err instanceof UserError) return json({ error: err.message }, err.status)
   console.error(`${what} failed:`, err)
   return json({ error: "Something went wrong on our side." }, 500)
+}
+
+// --- League controls: draw the next round / finish ------------------------------------------
+
+export type NextStep = { kind: "start" | "draw" | "finish"; round: number }
+
+/**
+ * What the league's next step is, from its notes on the deploy branch. Same rules as the
+ * league controls button (plugins/league-controls); throws a UserError (409) if it can't go yet.
+ */
+export async function nextStep(gh: GitHub, league: string, leagueNote: string): Promise<NextStep> {
+  const status = frontmatterValue(leagueNote, "status")?.toLowerCase()
+  if (status === "completed") throw new UserError("This league is already complete.", 409)
+  const current = Number(frontmatterValue(leagueNote, "current_round")) || 0
+  const rounds = Number(frontmatterValue(leagueNote, "rounds")) || 0
+  const statuses = async (dir: string) =>
+    Promise.all(
+      (await gh.list(dir))
+        .filter((f) => f.endsWith(".md"))
+        .map(async (f) => ({
+          name: f.replace(/\.md$/, ""),
+          status: frontmatterValue((await gh.file(`${dir}/${f}`)) ?? "", "status")?.toLowerCase() ?? "",
+        })),
+    )
+
+  if (status !== "active" || current === 0) {
+    const players = (await statuses(`content/${league}/Registered Players`)).filter((p) => p.status !== "dropped")
+    if (players.length < 2) {
+      throw new UserError("At least 2 players need to register before the league can start.", 409)
+    }
+    return { kind: "start", round: 0 }
+  }
+
+  const outstanding = (await statuses(`content/${league}/Pairings/Round ${current}`))
+    .filter((p) => p.status === "" || p.status === "scheduled")
+    .map((p) => p.name)
+  if (outstanding.length) {
+    const count = outstanding.length === 1 ? "1 result" : `${outstanding.length} results`
+    throw new UserError(`Waiting for ${count} from round ${current}: ${outstanding.join(", ")}.`, 409)
+  }
+  return { kind: rounds && current >= rounds ? "finish" : "draw", round: current }
+}
+
+/** Lock branch for one step of one league, e.g. advance/league-2/round-2 or advance/league-2/finish. */
+export const advanceLock = (leagueName: string, step: NextStep) =>
+  `advance/${slug(leagueName)}/${step.kind === "finish" ? "finish" : `round-${step.round + 1}`}`
+
+export async function advanceLeague(
+  request: Request,
+  env: Env,
+  gh = github(env),
+  verify: Verifier = turnstile(env),
+): Promise<Response> {
+  try {
+    const body = (await request.json().catch(() => null)) as { league?: unknown; turnstileToken?: unknown } | null
+    await requireHuman(request, env, verify, body)
+
+    const league = typeof body?.league === "string" ? body.league.trim() : ""
+    if (!LEAGUE.test(league) || league.includes("..")) throw new UserError("Unknown league.")
+    const leagueName = league.split("/").pop()!
+    const leagueNote = await gh.file(`content/${league}/${leagueName}.md`)
+    if (leagueNote === null) throw new UserError("Unknown league.")
+
+    const step = await nextStep(gh, league, leagueNote)
+    const soon = "It will appear here in a few minutes."
+    const message =
+      step.kind === "start"
+        ? `${leagueName} is starting and round 1 is being drawn. ${soon}`
+        : step.kind === "draw"
+          ? `Round ${step.round + 1} is being drawn. ${soon}`
+          : `${leagueName} is being finished. The final standings and winner will appear here in a few minutes.`
+
+    // Only one request per step gets through: creating the lock branch either succeeds or
+    // fails because it exists, so two presses can't both win. The workflow deletes the lock
+    // when it finishes (pass or fail), so a failed draw can be pressed again.
+    const lock = advanceLock(leagueName, step)
+    if (!(await gh.createBranch(lock))) {
+      const already =
+        step.kind === "start"
+          ? `${leagueName} is already starting and round 1 is being drawn. ${soon}`
+          : step.kind === "draw"
+            ? `Round ${step.round + 1} is already being drawn. ${soon}`
+            : `${leagueName} is already being finished. The final standings and winner will appear here in a few minutes.`
+      return json({ ok: true, step: step.kind, alreadyRunning: true, message: already })
+    }
+    try {
+      // the workflow also re-checks with --strict --expect-round, as a final safety net
+      // round as text: in workflow expressions a number 0 counts as empty (`0 || x` is x)
+      await gh.dispatch("advance-league", { league: leagueName, round: String(step.round), lock })
+    } catch (err) {
+      await gh.deleteBranch(lock).catch(() => {}) // nothing will run, so don't leave it locked
+      throw err
+    }
+    return json({ ok: true, step: step.kind, message })
+  } catch (err) {
+    return failed(err, "advance league")
+  }
 }
 
 /** Seasons compare ignoring case and extra spaces. */
@@ -356,9 +460,12 @@ export type GitHub = {
   folders(path: string): Promise<string[]>
   /** Create a branch from the deploy branch. false if it already exists. */
   createBranch(branch: string): Promise<boolean>
+  deleteBranch(branch: string): Promise<void>
   putFile(path: string, content: string, branch: string, message: string): Promise<void>
   /** Open a pull request into the deploy branch; returns its URL. */
   openPullRequest(branch: string, title: string, body: string): Promise<string>
+  /** Send a repository_dispatch event (starts workflows listening for that event type). */
+  dispatch(eventType: string, payload: Record<string, unknown>): Promise<void>
 }
 
 const b64encode = (s: string) => btoa(String.fromCharCode(...new TextEncoder().encode(s)))
@@ -423,6 +530,10 @@ export function github(env: Env, fetchImpl: typeof fetch = fetch): GitHub {
       if (!res.ok) await fail(`create branch ${branch}`, res)
       return true
     },
+    async deleteBranch(branch) {
+      const res = await api("DELETE", `/git/refs/heads/${encodePath(branch)}`)
+      if (!res.ok && res.status !== 404 && res.status !== 422) await fail(`delete branch ${branch}`, res)
+    },
     async putFile(path, content, branch, message) {
       const res = await api("PUT", `/contents/${encodePath(path)}`, {
         message,
@@ -430,6 +541,11 @@ export function github(env: Env, fetchImpl: typeof fetch = fetch): GitHub {
         branch,
       })
       if (!res.ok) await fail(`write ${path}`, res)
+    },
+    async dispatch(eventType, payload) {
+      // fine-grained token: needs Contents read/write (already required for registrations)
+      const res = await api("POST", "/dispatches", { event_type: eventType, client_payload: payload })
+      if (!res.ok) await fail(`dispatch ${eventType}`, res)
     },
     async openPullRequest(branch, title, body) {
       const res = await api("POST", "/pulls", { title, head: branch, base: env.GITHUB_BRANCH, body })

@@ -6,6 +6,7 @@ import worker, {
   SEASON_ERROR,
   seasonTaken,
   checkArmyLink,
+  advanceLeague,
   createLeague,
   frontmatterValue,
   github,
@@ -33,9 +34,11 @@ function fakeGitHub(
   branches: string[] = [],
   /** files on other branches: { branch: { path: content } } */
   branchFiles: Record<string, Record<string, string>> = {},
+  failDispatch = false,
 ) {
   const written: { path: string; content: string; branch: string }[] = []
   const prs: { branch: string; title: string }[] = []
+  const dispatches: { eventType: string; payload: Record<string, unknown> }[] = []
   const gh: GitHub = {
     async file(p, branch) {
       return (branch ? branchFiles[branch]?.[p] : files[p]) ?? null
@@ -62,12 +65,20 @@ function fakeGitHub(
     async putFile(path, content, branch) {
       written.push({ path, content, branch })
     },
+    async deleteBranch(b) {
+      const i = branches.indexOf(b)
+      if (i >= 0) branches.splice(i, 1)
+    },
+    async dispatch(eventType, payload) {
+      if (failDispatch) throw new Error("GitHub dispatch failed: 500")
+      dispatches.push({ eventType, payload })
+    },
     async openPullRequest(branch, title) {
       prs.push({ branch, title })
       return `https://github.com/owner/repo/pull/${prs.length}`
     },
   }
-  return { gh, written, prs, branches }
+  return { gh, written, prs, branches, dispatches }
 }
 
 const baseFiles = () => ({
@@ -419,4 +430,125 @@ test("rejects a season used by a league still waiting for approval", async () =>
   const r = await create({ season: "WINTER" }, leagueFiles(), [pending], branchFiles)
   assert.equal(r.status, 409)
   assert.deepEqual(r.branches, [pending]) // no new branch
+})
+
+// --- League controls: advancing a league -----------------------------------------------------
+
+const leagueAt = (status: string, current: number, rounds = 3) =>
+  `---\ntitle: League 2\nstatus: ${status}\nrounds: ${rounds}\ncurrent_round: ${current}\n---\n`
+const player = (status = "active") => `---\nstatus: ${status}\n---\n`
+const pairing = (status: string) => `---\nround: 1\nstatus: "${status}"\n---\n`
+const P = "content/Leagues/League 2"
+
+async function advance(body: any, files: Record<string, string>, branches: string[] = [], failDispatch = false) {
+  const fake = fakeGitHub(files, branches, {}, failDispatch)
+  const withToken = body && typeof body === "object" ? { turnstileToken: "ok", ...body } : body
+  const req = new Request("https://site.example/api/advance", { method: "POST", body: JSON.stringify(withToken) })
+  const res = await advanceLeague(req, env, fake.gh, verifyOk)
+  return { status: res.status, body: (await res.json()) as Record<string, string>, ...fake }
+}
+
+test("advance: starts an upcoming league with 2+ players", async () => {
+  const r = await advance({ league: "Leagues/League 2" }, {
+    [`${P}/League 2.md`]: leagueAt("Upcoming", 0, 0),
+    [`${P}/Registered Players/A.md`]: player(),
+    [`${P}/Registered Players/B.md`]: player(),
+  })
+  assert.equal(r.status, 200, JSON.stringify(r.body))
+  assert.equal(r.body.step, "start")
+  assert.deepEqual(r.dispatches, [
+    { eventType: "advance-league", payload: { league: "League 2", round: "0", lock: "advance/league-2/round-1" } },
+  ])
+  assert.deepEqual(r.branches, ["advance/league-2/round-1"])
+})
+
+test("advance: won't start with fewer than 2 players (dropped don't count)", async () => {
+  const r = await advance({ league: "Leagues/League 2" }, {
+    [`${P}/League 2.md`]: leagueAt("Upcoming", 0, 0),
+    [`${P}/Registered Players/A.md`]: player(),
+    [`${P}/Registered Players/B.md`]: player("dropped"),
+  })
+  assert.equal(r.status, 409)
+  assert.match(r.body.error, /At least 2 players/)
+  assert.equal(r.dispatches.length, 0)
+})
+
+test("advance: waits for every result in the current round", async () => {
+  const r = await advance({ league: "Leagues/League 2" }, {
+    [`${P}/League 2.md`]: leagueAt('"Active"', 1),
+    [`${P}/Pairings/Round 1/A vs B.md`]: pairing("played"),
+    [`${P}/Pairings/Round 1/C vs D.md`]: pairing("scheduled"),
+  })
+  assert.equal(r.status, 409)
+  assert.equal(r.body.error, "Waiting for 1 result from round 1: C vs D.")
+  assert.equal(r.dispatches.length, 0)
+})
+
+test("advance: draws the next round once results are in", async () => {
+  const r = await advance({ league: "Leagues/League 2" }, {
+    [`${P}/League 2.md`]: leagueAt('"Active"', 1),
+    [`${P}/Pairings/Round 1/A vs B.md`]: pairing("played"),
+    [`${P}/Pairings/Round 1/C vs D.md`]: pairing("unplayed"),
+  })
+  assert.equal(r.status, 200)
+  assert.equal(r.body.step, "draw")
+  assert.match(r.body.message, /Round 2 is being drawn/)
+  assert.deepEqual(r.dispatches[0].payload, { league: "League 2", round: "1", lock: "advance/league-2/round-2" })
+})
+
+test("advance: finishes after the final round, and refuses a completed league", async () => {
+  const files = { [`${P}/League 2.md`]: leagueAt('"Active"', 3), [`${P}/Pairings/Round 3/A vs B.md`]: pairing("played") }
+  const r = await advance({ league: "Leagues/League 2" }, files)
+  assert.equal(r.body.step, "finish")
+  assert.equal(r.dispatches[0].payload.lock, "advance/league-2/finish")
+  const done = await advance({ league: "Leagues/League 2" }, { [`${P}/League 2.md`]: leagueAt("Completed", 3) })
+  assert.equal(done.status, 409)
+  assert.equal(done.dispatches.length, 0)
+})
+
+test("advance: needs Turnstile and a real league", async () => {
+  const files = { [`${P}/League 2.md`]: leagueAt("Upcoming", 0, 0) }
+  assert.equal((await advance({ league: "Leagues/League 2", turnstileToken: "bad" }, files)).status, 403)
+  for (const league of ["Leagues/Nope", "../x", "Leagues/../x", 7]) {
+    const r = await advance({ league }, files)
+    assert.equal(r.status, 400, String(league))
+    assert.equal(r.dispatches.length, 0)
+  }
+})
+
+test("github.dispatch sends a repository_dispatch event", async () => {
+  const seen: { url: string; body: string }[] = []
+  const fetchImpl = (async (url: string, init: RequestInit) => {
+    seen.push({ url, body: String(init.body) })
+    return new Response(null, { status: 204 })
+  }) as unknown as typeof fetch
+  await github(env, fetchImpl).dispatch("advance-league", { league: "League 2", round: 1 })
+  assert.equal(seen[0].url, "https://api.github.com/repos/owner/repo/dispatches")
+  assert.deepEqual(JSON.parse(seen[0].body), { event_type: "advance-league", client_payload: { league: "League 2", round: 1 } })
+})
+
+test("advance: a second press for the same step doesn't start another run", async () => {
+  const files = {
+    [`${P}/League 2.md`]: leagueAt('"Active"', 1),
+    [`${P}/Pairings/Round 1/A vs B.md`]: pairing("played"),
+  }
+  const branches: string[] = []
+  const first = await advance({ league: "Leagues/League 2" }, files, branches)
+  const second = await advance({ league: "Leagues/League 2" }, files, branches)
+  assert.equal(first.dispatches.length, 1)
+  assert.equal(second.status, 200)
+  assert.equal(second.body.alreadyRunning, true)
+  assert.equal(second.body.message, "Round 2 is already being drawn. It will appear here in a few minutes.")
+  assert.equal(second.dispatches.length, 0)
+})
+
+test("advance: if GitHub won't start the run, the lock is removed so it can be pressed again", async () => {
+  const files = { [`${P}/League 2.md`]: leagueAt('"Active"', 1), [`${P}/Pairings/Round 1/A vs B.md`]: pairing("played") }
+  const branches: string[] = []
+  const r = await advance({ league: "Leagues/League 2" }, files, branches, true)
+  assert.equal(r.status, 500)
+  assert.deepEqual(branches, [])
+  const retry = await advance({ league: "Leagues/League 2" }, files, branches)
+  assert.equal(retry.status, 200)
+  assert.equal(retry.dispatches.length, 1)
 })

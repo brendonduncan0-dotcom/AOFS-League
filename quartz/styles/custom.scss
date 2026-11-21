@@ -52,6 +52,21 @@ h2#create-a-new-league:not(:has(+ .league-creation)) {
   display: none;
 }
 
+// League controls (bottom of each league page): same idea for the ```league-controls block.
+// Until a plugin renders it as an element with class `league-controls`, hide the raw block,
+// and hide the "League controls" heading (and its table-of-contents link) when nothing follows it.
+figure:has(> pre[data-language="league-controls"]) {
+  display: none;
+}
+
+h2#league-controls:not(:has(+ .league-controls)) {
+  display: none;
+}
+
+:root:has(h2#league-controls:not(:has(+ .league-controls))) a[href="#league-controls"] {
+  display: none;
+}
+
 // League pages (the ones with a Leaderboard): hide the folder listing
 // ("N items under this folder" + links to Pairings / Registered Players / Results)
 :root:has(h2#leaderboard) .page-listing {

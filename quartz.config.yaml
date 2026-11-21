@@ -251,6 +251,12 @@ plugins:
       # Cloudflare Turnstile site key (public, safe to commit)
       turnstileSiteKey: "0x4AAAAAAGLJENNAXP6DjRuB"
     order: 50
+  - source: ./plugins/league-controls
+    enabled: true
+    options:
+      endpoint: /api/advance
+      turnstileSiteKey: "0x4AAAAAAGLJENNAXP6DjRuB"
+    order: 51
 layout:
   groups:
     toolbar:

@@ -52,6 +52,9 @@ jobs:
   #   register/*       adds one player note:  content/Leagues/<League>/Registered Players/<Name>.md
   #   create-league/*  adds one league note:  content/Leagues/League N/League N.md
   # Anything else is left open for a person to review.
+  # Registrations are also re-checked against the league as it is now (scripts/check-registration.ts):
+  # if the league moved on while the PR waited (e.g. round 1 was drawn), joined_round is
+  # corrected first; if registration has closed since, the PR is left for review.
   automerge:
     name: Auto-merge website change
     needs: check
@@ -68,8 +71,10 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       PR: ${{ github.event.pull_request.number }}
       BRANCH: ${{ github.head_ref }}
+      BASE: ${{ github.event.pull_request.base.ref }}
     steps:
       - name: Check the PR only makes the expected change
+        id: changes
         run: |
           changes=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}/files" --paginate --jq '.[] | "\(.status)\t\(.filename)"')
           printf 'Changes:\n%s\n' "$changes"
@@ -90,6 +95,44 @@ jobs:
           if [ "$count" -ne 1 ] || [ "$status" != "added" ] || [ "$ok" != true ]; then
             echo "::notice::Not auto-merging: this PR does more than ${what}. Leaving it for review."
             exit 1
+          fi
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        if: startsWith(github.head_ref, 'register/')
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: actions/setup-node@v4
+        if: startsWith(github.head_ref, 'register/')
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - if: startsWith(github.head_ref, 'register/')
+        run: npm ci --no-audit --no-fund
+      - name: Re-check the registration against the league now
+        if: startsWith(github.head_ref, 'register/')
+        env:
+          FILE: ${{ steps.changes.outputs.file }}
+        run: |
+          league_dir=$(dirname "$(dirname "$FILE")")
+          league=$(basename "$league_dir")
+          git fetch --depth 1 origin "$BASE"
+          git show "origin/${BASE}:${league_dir}/${league}.md" > "$RUNNER_TEMP/league.md"
+          set +e
+          npx tsx scripts/check-registration.ts "$FILE" "$RUNNER_TEMP/league.md"
+          code=$?
+          set -e
+          if [ "$code" -eq 2 ]; then
+            echo "::notice::Not auto-merging: registration for ${league} closed while this PR was waiting. Leaving it for review."
+            exit 1
+          fi
+          [ "$code" -eq 0 ] || exit "$code"
+          if ! git diff --quiet; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            round=$(grep -m1 '^joined_round:' "$FILE" | awk '{print $2}')
+            git commit -am "Join from round ${round} (the league moved on while this was waiting)"
+            # pushed with the workflow token, so this doesn't start another run of this workflow
+            git push origin "HEAD:${BRANCH}"
           fi
       - name: Merge and delete the branch
         run: gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
@@ -124,5 +167,9 @@ jobs:
           git add content/Leagues
           # [skip ci]: Cloudflare already built the site with these standings, so skip a rebuild.
           git commit -m "Update standings [skip ci]"
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          # another merge can land between the pull and the push: try a few times
+          for attempt in 1 2 3; do
+            git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}" && exit 0
+            sleep 5
+          done
+          exit 1

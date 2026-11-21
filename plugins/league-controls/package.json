@@ -1,0 +1,43 @@
+{
+  "name": "league-controls",
+  "version": "0.1.0",
+  "description": "Renders ```league-controls code blocks as controls for running a league (e.g. drawing the next round).",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "quartz": {
+    "name": "league-controls",
+    "displayName": "League Controls",
+    "description": "Controls for running a league, such as drawing the next round",
+    "category": "transformer",
+    "quartzVersion": ">=5.1.0",
+    "defaultOrder": 51,
+    "defaultEnabled": true,
+    "defaultOptions": {
+      "endpoint": "",
+      "turnstileSiteKey": ""
+    },
+    "configSchema": {
+      "type": "object",
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "description": "URL the button POSTs to (the Cloudflare Worker, /api/advance). Leave empty until it exists."
+        },
+        "turnstileSiteKey": {
+          "type": "string",
+          "description": "Cloudflare Turnstile site key (public). When set, the button needs the Turnstile check."
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "types": "./dist/index.d.ts"
+}
