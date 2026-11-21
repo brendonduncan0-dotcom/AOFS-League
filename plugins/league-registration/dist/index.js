@@ -1,21 +1,22 @@
-// League Registration: a Quartz transformer plugin.
+// League forms: a Quartz transformer plugin.
 //
-// Replaces ```league-registration code blocks with a registration form, but only while the
-// league's registration is open (see registrationRound). Otherwise the block is removed.
-// Replaces ```league-creation code blocks (the homepage) with a form for creating a new league.
+// ```league-registration  (league pages)  player registration form, shown only while the
+//                          league's registration is open (see registrationRound); otherwise
+//                          the block is removed.
+// ```league-creation      (homepage)      form for creating a new league from a season name.
 //
-// Hand-written ESM (no build step): this file is the plugin's shipped output.
+// Both forms share their markup, styles and client script. Hand-written ESM (no build step):
+// this file is the plugin's shipped output.
 //
 // Options:
-//   endpoint          URL the form POSTs to as JSON { league, name, armyLink, turnstileToken }, where
-//                     league is the league's folder (e.g. "Leagues/League 2"). Empty = not
-//                     connected yet: the form validates the name and explains that.
-//   createEndpoint    URL the league creation form POSTs to as JSON { season, turnstileToken }.
-//                     Empty = not connected yet.
+//   endpoint          Registration URL; receives JSON { league, name, armyLink, turnstileToken },
+//                     where league is the league's folder (e.g. "Leagues/League 2").
+//   createEndpoint    League creation URL; receives JSON { season, turnstileToken }.
 //   turnstileSiteKey  Cloudflare Turnstile site key (public). When set, the forms show the
 //                     Turnstile check and send its token; the Worker verifies it.
+// An empty endpoint means "not connected yet": the form still checks its fields and says so.
 
-const LANG = "league-registration"
+const REGISTER_LANG = "league-registration"
 const CREATE_LANG = "league-creation"
 
 /**
@@ -24,8 +25,7 @@ const CREATE_LANG = "league-creation"
  * Upcoming (join from round 1) or Active with rounds still to pair (join from the next round).
  */
 function registrationRound(fm) {
-  const open = fm.registration_open === true || String(fm.registration_open).toLowerCase() === "true"
-  if (!open) return undefined
+  if (String(fm.registration_open).toLowerCase() !== "true") return undefined
   const status = String(fm.status ?? "").toLowerCase()
   if (status === "upcoming") return 1
   if (status !== "active") return undefined
@@ -35,183 +35,134 @@ function registrationRound(fm) {
   return current + 1
 }
 
-/** Walk an mdast tree, replacing/removing `code` nodes in the registration language. */
-function remarkLeagueRegistration(endpoint, createEndpoint, siteKey) {
+/** Replace (or remove) the forms' code blocks anywhere in the page's mdast tree. */
+function remarkLeagueForms({ endpoint, createEndpoint, siteKey }) {
   return () => (tree, file) => {
     const fm = file.data?.frontmatter ?? {}
     const joinRound = registrationRound(fm)
-    const league = String(fm.title ?? "")
     // the league's folder in content/, e.g. "Leagues/League 2" (the Worker uses this, not the title)
     const folder = String(file.data?.relativePath ?? "").split("/").slice(0, -1).join("/")
-
+    const replacement = (node) => {
+      if (node.type !== "code") return undefined
+      if (node.lang === REGISTER_LANG) {
+        return joinRound ? registrationForm(String(fm.title ?? ""), folder, endpoint, siteKey, joinRound) : null
+      }
+      if (node.lang === CREATE_LANG) return creationForm(createEndpoint, siteKey)
+      return undefined
+    }
     const visit = (parent) => {
       if (!parent.children) return
       for (let i = parent.children.length - 1; i >= 0; i--) {
         const node = parent.children[i]
-        if (node.type === "code" && node.lang === LANG) {
-          if (joinRound) parent.children[i] = formNode(league, folder, endpoint, siteKey, joinRound)
-          else parent.children.splice(i, 1)
-        } else if (node.type === "code" && node.lang === CREATE_LANG) {
-          parent.children[i] = creationNode(createEndpoint, siteKey)
-        } else {
-          visit(node)
-        }
+        const next = replacement(node)
+        if (next === undefined) visit(node)
+        else if (next === null) parent.children.splice(i, 1)
+        else parent.children[i] = next
       }
     }
     visit(tree)
   }
 }
 
+// --- Markup (hast via mdast data.hName/hChildren) ---------------------------------------------
+
 const el = (tagName, properties = {}, children = []) => ({ type: "element", tagName, properties, children })
 const text = (value) => ({ type: "text", value })
+const checkLine = (id) => el("p", { id, className: ["league-registration-check"], ariaLive: "polite" })
 
-/** An mdast node that mdast-util-to-hast turns into the form markup (via data.hName/hChildren). */
-function formNode(league, folder, endpoint, siteKey, joinRound = 1) {
-  const idBase = `league-registration-${league.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`
-  const inputId = `${idBase}-name`
-  const armyId = `${idBase}-army`
-  const helpId = `${idBase}-army-help`
-  const checkId = `${idBase}-army-check`
-  const nameCheckId = `${idBase}-name-check`
+/** A labelled input with its check line (live messages) and optional help text under it. */
+function field({ id, label, help, ...input }) {
+  const describedBy = [`${id}-check`, help && `${id}-help`].filter(Boolean).join(" ")
+  return el("div", { className: ["league-registration-field"] }, [
+    el("label", { htmlFor: id }, [text(label)]),
+    el("input", { id, type: "text", required: true, autoComplete: "off", ariaDescribedby: describedBy, ...input }),
+    checkLine(`${id}-check`),
+    ...(help ? [el("p", { id: `${id}-help`, className: ["league-registration-help"] }, help)] : []),
+  ])
+}
+
+/** A form: optional intro, fields, the Turnstile check, the button, and the status line. */
+function form({ type, action, endpoint, siteKey, data = {}, intro, fields, button }) {
   return {
+    type,
+    data: {
+      hName: "div",
+      hProperties: { className: ["league-registration"], dataAction: action, dataEndpoint: endpoint || undefined, ...data },
+      hChildren: [
+        ...(intro ? [el("p", { className: ["league-registration-intro"] }, [text(intro)])] : []),
+        el("form", { className: ["league-registration-form"], noValidate: true }, [
+          ...fields,
+          ...(siteKey
+            ? [
+                el("div", { className: ["league-registration-verify"] }, [
+                  el("div", { className: ["league-registration-turnstile"], dataSitekey: siteKey }),
+                  checkLine(),
+                ]),
+              ]
+            : []),
+          el("div", { className: ["league-registration-actions"] }, [el("button", { type: "submit" }, [text(button)])]),
+        ]),
+        el("p", { className: ["league-registration-status"], role: "status", ariaLive: "polite" }),
+      ],
+    },
+  }
+}
+
+function registrationForm(league, folder, endpoint, siteKey, joinRound) {
+  const id = `league-registration-${league.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`
+  return form({
     type: "leagueRegistration",
-    data: {
-      hName: "div",
-      hProperties: {
-        className: ["league-registration"],
-        dataLeague: folder,
-        dataLeagueTitle: league,
-        dataEndpoint: endpoint || undefined,
-      },
-      hChildren: [
-        ...(joinRound > 1
-          ? [
-              el("p", { className: ["league-registration-intro"] }, [
-                text(`This league has started, but you can still join. You'll be paired from round ${joinRound}.`),
-              ]),
-            ]
-          : []),
-        el("form", { className: ["league-registration-form"], noValidate: true }, [
-          el("div", { className: ["league-registration-field"] }, [
-            el("label", { htmlFor: inputId }, [text("Your name")]),
-            el("input", {
-              id: inputId,
-              type: "text",
-              name: "name",
-              required: true,
-              maxLength: 40,
-              autoComplete: "name",
-              placeholder: "e.g. Brendon",
-              ariaDescribedby: nameCheckId,
-            }),
-            el("p", { id: nameCheckId, className: ["league-registration-check"], ariaLive: "polite" }),
-          ]),
-          el("div", { className: ["league-registration-field"] }, [
-            el("label", { htmlFor: armyId }, [text("Army link")]),
-            el("input", {
-              id: armyId,
-              type: "url",
-              name: "armyLink",
-              required: true,
-              maxLength: 500,
-              inputMode: "url",
-              autoComplete: "off",
-              placeholder: "https://army-forge.onepagerules.com/share?id=…",
-              ariaDescribedby: `${checkId} ${helpId}`,
-            }),
-            // live result of checking the link, directly under the input (filled in by the client script)
-            el("p", { id: checkId, className: ["league-registration-check"], ariaLive: "polite" }),
-            el("p", { id: helpId, className: ["league-registration-help"] }, [
-              text(
-                "Once you've made your list, you can get the URL by clicking the three dots at the top right of the page, selecting ",
-              ),
-              el("strong", {}, [text("Share List")]),
-              text(" and "),
-              el("strong", {}, [text("Share as a Link")]),
-              text("."),
-            ]),
-          ]),
-          ...verifyNodes(siteKey, "register"),
-          el("div", { className: ["league-registration-actions"] }, [
-            el("button", { type: "submit" }, [text("Register")]),
-          ]),
-        ]),
-        el("p", { className: ["league-registration-status"], role: "status", ariaLive: "polite" }),
-      ],
-    },
-  }
+    action: "register",
+    endpoint,
+    siteKey,
+    data: { dataLeague: folder },
+    intro: joinRound > 1 ? `This league has started, but you can still join. You'll be paired from round ${joinRound}.` : "",
+    fields: [
+      field({ id: `${id}-name`, label: "Your name", name: "name", maxLength: 40, autoComplete: "name", placeholder: "e.g. Brendon" }),
+      field({
+        id: `${id}-army`,
+        label: "Army link",
+        name: "armyLink",
+        type: "url",
+        inputMode: "url",
+        maxLength: 500,
+        placeholder: "https://army-forge.onepagerules.com/share?id=…",
+        help: [
+          text("Once you've made your list, you can get the URL by clicking the three dots at the top right of the page, selecting "),
+          el("strong", {}, [text("Share List")]),
+          text(" and "),
+          el("strong", {}, [text("Share as a Link")]),
+          text("."),
+        ],
+      }),
+    ],
+    button: "Register",
+  })
 }
 
-/** The Turnstile check and the line for its message (nothing without a site key). */
-function verifyNodes(siteKey, action) {
-  if (!siteKey) return []
-  return [
-    el("div", { className: ["league-registration-verify"] }, [
-      el("div", { className: ["league-registration-turnstile"], dataSitekey: siteKey, dataAction: action }),
-      el("p", { className: ["league-registration-check"], ariaLive: "polite" }),
-    ]),
-  ]
-}
-
-/** The homepage form for creating a league: a season name. The Worker picks the League number. */
-function creationNode(endpoint, siteKey) {
-  const seasonId = "league-creation-season"
-  const seasonCheckId = `${seasonId}-check`
-  const seasonHelpId = `${seasonId}-help`
-  return {
+function creationForm(endpoint, siteKey) {
+  return form({
     type: "leagueCreation",
-    data: {
-      hName: "div",
-      hProperties: {
-        // shares the registration form's styles and client script
-        className: ["league-registration", "league-creation"],
-        dataAction: "create",
-        dataEndpoint: endpoint || undefined,
-      },
-      hChildren: [
-        el("form", { className: ["league-registration-form"], noValidate: true }, [
-          el("div", { className: ["league-registration-field"] }, [
-            el("label", { htmlFor: seasonId }, [text("Season name")]),
-            el("input", {
-              id: seasonId,
-              type: "text",
-              name: "season",
-              required: true,
-              maxLength: 60,
-              autoComplete: "off",
-              placeholder: "e.g. 2027 Summer",
-              ariaDescribedby: `${seasonCheckId} ${seasonHelpId}`,
-            }),
-            el("p", { id: seasonCheckId, className: ["league-registration-check"], ariaLive: "polite" }),
-            el("p", { id: seasonHelpId, className: ["league-registration-help"] }, [
-              text(
-                "The league is named for you (the next League number). The number of rounds is set when the first round is drawn, based on how many players have registered.",
-              ),
-            ]),
-          ]),
-          ...verifyNodes(siteKey, "create_league"),
-          el("div", { className: ["league-registration-actions"] }, [
-            el("button", { type: "submit" }, [text("Create league")]),
-          ]),
-        ]),
-        el("p", { className: ["league-registration-status"], role: "status", ariaLive: "polite" }),
-      ],
-    },
-  }
+    action: "create",
+    endpoint,
+    siteKey,
+    data: { className: ["league-registration", "league-creation"] },
+    fields: [field({ id: "league-creation-season", label: "Season name", name: "season", maxLength: 60, placeholder: "e.g. 2027 Summer" })],
+    button: "Create league",
+  })
 }
 
-// Client-side behaviour. Uses event delegation on `document` (installed once), so it keeps
-// working across Quartz's SPA navigations without re-binding.
+// --- Client script ---------------------------------------------------------------------------
+// Event delegation on `document` (installed once), so it keeps working across Quartz's SPA
+// navigations without re-binding.
 const clientScript = `
 (() => {
-  if (window.__leagueRegistration) return
-  window.__leagueRegistration = true
+  if (window.__leagueForms) return
+  window.__leagueForms = true
 
+  // Same rules and messages as the Worker (worker/index.ts NAME, SEASON, checkArmyLink)
   const NAME = /^[\\p{L}\\p{N}][\\p{L}\\p{N} '\\-.]{0,39}$/u
-  // Same rule and message as the Worker (worker/index.ts SEASON)
   const SEASON = /^[\\p{L}\\p{N}][\\p{L}\\p{N} '\\-.,&()/]{0,59}$/u
-  const SEASON_ERROR = "Season names can use letters, numbers, spaces and - ' . , & ( ) / (max 60)."
-  // Same rules and messages as the Worker (worker/index.ts checkArmyLink)
   const ARMY_ERRORS = {
     missing: "Please enter your army link.",
     site: "That isn't an Army Forge link.",
@@ -221,6 +172,10 @@ const clientScript = `
     id: "That link is incomplete.",
     long: "That link is too long.",
   }
+  const VERIFY = "Please complete the verification check."
+  const FIX = "Please fix the errors above."
+
+  const clean = (value) => value.trim().replace(/\\s+/g, " ")
   const armyLinkError = (value) => {
     if (!value) return ARMY_ERRORS.missing
     if (value.length > 500) return ARMY_ERRORS.long
@@ -240,9 +195,91 @@ const clientScript = `
     if (!(url.searchParams.get("id") || "").trim()) return ARMY_ERRORS.id
     return null
   }
+  // the Registered Players table (Upcoming) or the Leaderboard (Active)
+  const registeredNames = () =>
+    [...document.querySelectorAll("h2#registered-players + .bases-page tbody a, h2#leaderboard + .bases-page tbody a")]
+      .map((a) => a.textContent.trim().toLowerCase())
+
+  /** Each field's check: an error message, or null if it's OK. */
+  const CHECKS = {
+    name: (value) => {
+      value = clean(value)
+      if (!value) return "Please enter your name."
+      if (!NAME.test(value)) return "Names can use letters, numbers, spaces, hyphens, apostrophes and full stops (max 40)."
+      if (registeredNames().includes(value.toLowerCase())) return value + " is already registered for this league."
+      return null
+    },
+    armyLink: (value) => armyLinkError(value.trim()),
+    season: (value) => {
+      value = clean(value)
+      if (!value) return "Please enter a season name."
+      if (!SEASON.test(value)) return "Season names can use letters, numbers, spaces and - ' . , & ( ) / (max 60)."
+      return null
+    },
+  }
+
+  /** What each form sends and says. \`input\` is the field a 4xx from the Worker is shown under. */
+  const FORMS = {
+    register: {
+      input: "name",
+      fieldErrorStatus: 409, // name taken, or already waiting for approval
+      body: (v, root) => ({ league: root.dataset.league, name: clean(v.name), armyLink: v.armyLink.trim() }),
+      notConnected: (v) => "Thanks, " + clean(v.name) + "! Online registration isn't connected yet, so please let the organiser know you'd like to join.",
+      sending: "Registering…",
+      failed: "Sorry, registration failed: ",
+      done: (v, data, status) => (status.textContent = "Thanks, " + clean(v.name) + "! Your registration has been sent and will appear once it's approved."),
+    },
+    create: {
+      input: "season",
+      fieldErrorStatus: 400, // season name rejected
+      body: (v) => ({ season: clean(v.season) }),
+      notConnected: () => "Creating leagues online isn't connected yet, so please ask the organiser to set it up.",
+      sending: "Creating league…",
+      failed: "Sorry, creating the league failed: ",
+      done: (v, data, status) => {
+        const link = document.createElement("a")
+        link.href = data.url
+        link.textContent = "go to " + data.league
+        status.replaceChildren(data.league + " has been created! It will be on the site in a few minutes: ", link, ".")
+      },
+    },
+  }
+
+  // --- Messages ---
+  const setMessage = (line, message, kind) => {
+    if (!line) return
+    line.textContent = message || ""
+    if (kind && message) line.dataset.kind = kind
+    else delete line.dataset.kind
+  }
+  const statusOf = (el) => el.closest(".league-registration")?.querySelector(".league-registration-status")
+  /** Once something is fixed, the "Please fix…" by the button is stale. */
+  const clearStatusError = (el) => {
+    const status = statusOf(el)
+    if (status?.dataset.kind === "error") setMessage(status, "", null)
+  }
+  const fieldLine = (input) => input.closest(".league-registration-field")?.querySelector(".league-registration-check")
+  const showFieldMessage = (input, message, kind) => {
+    if (kind === "error") input.setAttribute("aria-invalid", "true")
+    else input.removeAttribute("aria-invalid")
+    setMessage(fieldLine(input), message, kind)
+  }
+  const showVerifyMessage = (slot, message) => {
+    setMessage(slot.closest(".league-registration-verify")?.querySelector(".league-registration-check"), message, "error")
+    if (!message) clearStatusError(slot)
+  }
+
+  /** Check a field and show the result under it. Returns true if it's OK. */
+  const checkField = (input) => {
+    const error = CHECKS[input.name]?.(input.value) ?? null
+    if (error) showFieldMessage(input, error, "error")
+    else if (input.name === "armyLink" && input.value.trim()) showFieldMessage(input, "✓ Looks good.", "ok")
+    else showFieldMessage(input, "", null)
+    return !error
+  }
 
   // --- Cloudflare Turnstile (explicit rendering, so it works with Quartz's SPA navigation) ---
-  const TURNSTILE_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=__leagueRegistrationTurnstile"
+  const TURNSTILE_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit&onload=__leagueFormsTurnstile"
   const renderWidgets = () => {
     const slots = document.querySelectorAll(".league-registration-turnstile:not([data-widget-id])")
     if (!slots.length) return
@@ -258,71 +295,20 @@ const clientScript = `
     for (const slot of slots) {
       slot.dataset.widgetId = window.turnstile.render(slot, {
         sitekey: slot.dataset.sitekey,
-        action: slot.dataset.action || "register",
+        action: slot.closest(".league-registration")?.dataset.action === "create" ? "create_league" : "register",
         callback: () => showVerifyMessage(slot, ""),
-        "expired-callback": () => showVerifyMessage(slot, "Please complete the verification check."),
+        "expired-callback": () => showVerifyMessage(slot, VERIFY),
       })
     }
   }
-  /** Message under the Turnstile check ("" clears it). */
-  const showVerifyMessage = (slot, message) => {
-    const line = slot.closest(".league-registration-verify")?.querySelector(".league-registration-check")
-    if (!line) return
-    line.textContent = message
-    if (message) line.dataset.kind = "error"
-    else delete line.dataset.kind
-    // solving the check after a failed Register also clears the "Please fix…" by the button
-    const status = slot.closest(".league-registration")?.querySelector(".league-registration-status")
-    if (!message && status?.dataset.kind === "error") {
-      status.textContent = ""
-      delete status.dataset.kind
-    }
-  }
-  window.__leagueRegistrationTurnstile = renderWidgets
+  window.__leagueFormsTurnstile = renderWidgets
   document.addEventListener("nav", renderWidgets)
   renderWidgets()
 
-  const registeredNames = () =>
-    // the Registered Players table (Upcoming) or the Leaderboard (Active)
-    [...document.querySelectorAll("h2#registered-players + .bases-page tbody a, h2#leaderboard + .bases-page tbody a")]
-      .map((a) => a.textContent.trim().toLowerCase())
-
-  // --- Field checks: each field shows its own message directly under its input ---
-  const cleanName = (value) => value.trim().replace(/\\s+/g, " ")
-  const fieldError = (input) => {
-    const value = input.name === "armyLink" ? input.value.trim() : cleanName(input.value)
-    if (input.name === "season") {
-      if (!value) return "Please enter a season name."
-      if (!SEASON.test(value)) return SEASON_ERROR
-      return null
-    }
-    if (input.name === "name") {
-      if (!value) return "Please enter your name."
-      if (!NAME.test(value)) return "Names can use letters, numbers, spaces, hyphens, apostrophes and full stops (max 40)."
-      if (registeredNames().includes(value.toLowerCase())) return value + " is already registered for this league."
-      return null
-    }
-    return armyLinkError(value)
-  }
-  const checkLine = (input) => input.closest(".league-registration-field")?.querySelector(".league-registration-check")
-  const showFieldMessage = (input, message, kind) => {
-    const line = checkLine(input)
-    if (kind === "error") input.setAttribute("aria-invalid", "true")
-    else input.removeAttribute("aria-invalid")
-    if (!line) return
-    line.textContent = message || ""
-    if (kind && message) line.dataset.kind = kind
-    else delete line.dataset.kind
-  }
-  /** Check a field and show the result under it. Returns true if it's OK. */
-  const checkField = (input) => {
-    const error = fieldError(input)
-    if (error) showFieldMessage(input, error, "error")
-    else if (input.name === "armyLink" && input.value.trim()) showFieldMessage(input, "✓ Looks good.", "ok")
-    else showFieldMessage(input, "", null)
-    return !error
-  }
-  const fieldOf = (t) => (t?.matches?.(".league-registration-form input") ? t : null)
+  // --- Live checks ---
+  // only the form's own fields: Turnstile also puts a hidden input (cf-turnstile-response) in the form
+  const FIELDS = ".league-registration-field input"
+  const fieldOf = (t) => (t?.matches?.(".league-registration-form " + FIELDS) ? t : null)
   // leaving a field (fires when its value changed)
   document.addEventListener("change", (e) => fieldOf(e.target) && checkField(e.target))
   // pasting a link: check once the pasted text is in the field
@@ -333,102 +319,66 @@ const clientScript = `
   document.addEventListener("input", (e) => {
     const input = fieldOf(e.target)
     if (!input) return
-    if (checkLine(input)?.dataset.kind) checkField(input)
-    // editing after a failed Register: clear the stale "Please fix…" under the button
-    const status = input.closest(".league-registration")?.querySelector(".league-registration-status")
-    if (status?.dataset.kind === "error") {
-      status.textContent = ""
-      delete status.dataset.kind
-    }
+    if (fieldLine(input)?.dataset.kind) checkField(input)
+    clearStatusError(input)
   })
 
+  // --- Submit ---
   document.addEventListener("submit", async (event) => {
     const form = event.target.closest?.(".league-registration-form")
     if (!form) return
     event.preventDefault()
 
     const root = form.closest(".league-registration")
+    const config = FORMS[root.dataset.action]
+    if (!config) return
     const status = root.querySelector(".league-registration-status")
     const button = form.querySelector("button")
-    const creating = root.dataset.action === "create"
-    const input = form.querySelector(creating ? "input[name=season]" : "input[name=name]")
-    const value = cleanName(input.value)
-    const armyLink = (form.querySelector("input[name=armyLink]")?.value ?? "").trim()
-    const say = (message, kind) => {
-      status.textContent = message
-      if (kind) status.dataset.kind = kind
-      else delete status.dataset.kind
-    }
+    const fields = [...form.querySelectorAll(FIELDS)]
+    const values = Object.fromEntries(fields.map((f) => [f.name, f.value]))
+    const say = (message, kind) => setMessage(status, message, kind)
 
-    const invalid = [...form.querySelectorAll("input")].filter((field) => !checkField(field))
+    const invalid = fields.filter((f) => !checkField(f))
     const slot = root.querySelector(".league-registration-turnstile")
-    let turnstileToken
-    if (slot) {
-      turnstileToken = window.turnstile && slot.dataset.widgetId ? window.turnstile.getResponse(slot.dataset.widgetId) : ""
-      showVerifyMessage(slot, turnstileToken ? "" : "Please complete the verification check.")
-    }
+    const turnstileToken = slot && window.turnstile && slot.dataset.widgetId ? window.turnstile.getResponse(slot.dataset.widgetId) : ""
+    if (slot) showVerifyMessage(slot, turnstileToken ? "" : VERIFY)
     if (invalid.length || (slot && !turnstileToken)) {
       if (invalid.length) invalid[0].focus()
       else slot.scrollIntoView?.({ block: "nearest", behavior: "smooth" })
-      return say("Please fix the errors above.", "error")
+      return say(FIX, "error")
     }
-    say("", null)
 
-    const endpoint = root.dataset.endpoint
-    if (!endpoint) {
-      return say(
-        creating
-          ? "Creating leagues online isn't connected yet, so please ask the organiser to set it up."
-          : "Thanks, " + value + "! Online registration isn't connected yet, so please let the organiser know you'd like to join.",
-        "info",
-      )
-    }
+    if (!root.dataset.endpoint) return say(config.notConnected(values), "info")
 
     button.disabled = true
-    say(creating ? "Creating league…" : "Registering…", "info")
+    say(config.sending, "info")
     try {
-      const res = await fetch(endpoint, {
+      const res = await fetch(root.dataset.endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          creating
-            ? { season: value, turnstileToken }
-            : { league: root.dataset.league, name: value, armyLink, turnstileToken },
-        ),
+        body: JSON.stringify({ ...config.body(values, root), turnstileToken: turnstileToken || undefined }),
       })
       const data = await res.json().catch(() => null)
       if (!res.ok) {
         const message = (data && data.error) || res.statusText || "unknown error"
         if (res.status === 403 && slot) {
           showVerifyMessage(slot, message)
-          say("Please fix the errors above.", "error")
-          return
+          return say(FIX, "error")
         }
-        // registration: the name is taken or already waiting; creation: a bad season name
-        if ((!creating && res.status === 409) || (creating && res.status === 400)) {
+        if (res.status === config.fieldErrorStatus) {
+          const input = form.querySelector("input[name=" + config.input + "]")
           showFieldMessage(input, message, "error")
           input.focus()
-          say("Please fix the errors above.", "error")
-          return
+          return say(FIX, "error")
         }
         throw new Error(message)
       }
       form.reset()
-      if (creating) {
-        say(data.league + " has been created! It will be on the site in a few minutes: ", "success")
-        const link = document.createElement("a")
-        link.href = data.url
-        link.textContent = "go to " + data.league
-        status.append(link, ".")
-      } else {
-        say("Thanks, " + value + "! Your registration has been sent and will appear once it's approved.", "success")
-      }
+      say("", null)
+      status.dataset.kind = "success"
+      config.done(values, data, status)
     } catch (err) {
-      say(
-        (creating ? "Sorry, creating the league failed: " : "Sorry, registration failed: ") +
-          (err && err.message ? err.message : "unknown error"),
-        "error",
-      )
+      say(config.failed + (err && err.message ? err.message : "unknown error"), "error")
     } finally {
       button.disabled = false
       // tokens are single-use: get a fresh one for any further attempt
@@ -440,6 +390,7 @@ const clientScript = `
 
 const css = `
 .league-registration { margin: 1rem 0 1.5rem; }
+.league-registration-intro { margin: 0 0 0.85rem; }
 .league-registration-form label { display: block; font-weight: 600; margin-bottom: 0.35rem; }
 .league-registration-field { margin-bottom: 0.85rem; max-width: 36rem; }
 .league-registration-field input {
@@ -448,35 +399,38 @@ const css = `
   border: 1px solid var(--lightgray); border-radius: 6px;
 }
 .league-registration-field input:focus { outline: 2px solid var(--secondary); outline-offset: 1px; }
-.league-registration-intro { margin: 0 0 0.85rem; }
+.league-registration-field input[aria-invalid="true"] { border-color: #c0392b; }
+.league-registration-field input[aria-invalid="true"]:focus { outline-color: #c0392b; }
 .league-registration-help { margin: 0.35rem 0 0; font-size: 0.85rem; color: var(--darkgray); }
 .league-registration-check { margin: 0.35rem 0 0; font-size: 0.9rem; }
 .league-registration-check:empty { display: none; }
 .league-registration-check[data-kind="error"] { color: #c0392b; }
 .league-registration-check[data-kind="ok"] { color: var(--tertiary); }
-.league-registration-field input[aria-invalid="true"] { border-color: #c0392b; }
-.league-registration-field input[aria-invalid="true"]:focus { outline-color: #c0392b; }
+.league-registration-verify { margin: 0 0 0.85rem; }
+.league-registration-turnstile { min-height: 65px; }
 .league-registration-actions button {
   padding: 0.5rem 1.1rem; font: inherit; font-weight: 600; cursor: pointer;
   color: var(--light); background: var(--secondary); border: none; border-radius: 6px;
 }
 .league-registration-actions button:hover { opacity: 0.9; }
 .league-registration-actions button:disabled { opacity: 0.6; cursor: progress; }
-.league-registration-verify { margin: 0 0 0.85rem; }
-.league-registration-turnstile { min-height: 65px; }
 .league-registration-status { margin: 0.5rem 0 0; min-height: 1.4em; font-size: 0.95rem; }
 .league-registration-status[data-kind="error"] { color: #c0392b; }
 .league-registration-status[data-kind="success"] { color: var(--tertiary); }
 `
 
+const option = (value) => (typeof value === "string" ? value.trim() : "")
+
 export const LeagueRegistration = (opts = {}) => {
-  const endpoint = typeof opts.endpoint === "string" ? opts.endpoint.trim() : ""
-  const createEndpoint = typeof opts.createEndpoint === "string" ? opts.createEndpoint.trim() : ""
-  const siteKey = typeof opts.turnstileSiteKey === "string" ? opts.turnstileSiteKey.trim() : ""
+  const options = {
+    endpoint: option(opts.endpoint),
+    createEndpoint: option(opts.createEndpoint),
+    siteKey: option(opts.turnstileSiteKey),
+  }
   return {
     name: "LeagueRegistration",
     markdownPlugins() {
-      return [remarkLeagueRegistration(endpoint, createEndpoint, siteKey)]
+      return [remarkLeagueForms(options)]
     },
     externalResources() {
       return {

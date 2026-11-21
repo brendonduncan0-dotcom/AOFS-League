@@ -39,16 +39,16 @@ figure:has(> pre[data-language="league-registration"]) {
 
 // League creation (homepage): same idea for the ```league-creation block. Until a plugin
 // renders it as an element with class `league-creation`, hide the raw block, and hide the
-// "Create a league" heading (and its table-of-contents link) when nothing follows it.
+// "Create a new league" heading (and its table-of-contents link) when nothing follows it.
 figure:has(> pre[data-language="league-creation"]) {
   display: none;
 }
 
-h2#create-a-league:not(:has(+ .league-creation)) {
+h2#create-a-new-league:not(:has(+ .league-creation)) {
   display: none;
 }
 
-:root:has(h2#create-a-league:not(:has(+ .league-creation))) a[href="#create-a-league"] {
+:root:has(h2#create-a-new-league:not(:has(+ .league-creation))) a[href="#create-a-new-league"] {
   display: none;
 }
 

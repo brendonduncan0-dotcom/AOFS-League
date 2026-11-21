@@ -1,7 +1,7 @@
 {
   "name": "league-registration",
   "version": "0.1.0",
-  "description": "Renders ```league-registration code blocks as a player registration form on league pages, and ```league-creation blocks as a form for creating a league.",
+  "description": "Player registration (```league-registration) and league creation (```league-creation) forms.",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",

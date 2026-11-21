@@ -84,7 +84,7 @@ views:
       - winner
 ```
 
-## Create a league
+## Create a new league
 
 ```league-creation
 ```
