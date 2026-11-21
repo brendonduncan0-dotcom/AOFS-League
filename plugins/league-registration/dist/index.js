@@ -2,6 +2,7 @@
 //
 // Replaces ```league-registration code blocks with a registration form, but only while the
 // league's registration is open (see registrationRound). Otherwise the block is removed.
+// Replaces ```league-creation code blocks (the homepage) with a form for creating a new league.
 //
 // Hand-written ESM (no build step): this file is the plugin's shipped output.
 //
@@ -9,10 +10,13 @@
 //   endpoint          URL the form POSTs to as JSON { league, name, armyLink, turnstileToken }, where
 //                     league is the league's folder (e.g. "Leagues/League 2"). Empty = not
 //                     connected yet: the form validates the name and explains that.
-//   turnstileSiteKey  Cloudflare Turnstile site key (public). When set, the form shows the
-//                     Turnstile check and sends its token; the Worker verifies it.
+//   createEndpoint    URL the league creation form POSTs to as JSON { season, turnstileToken }.
+//                     Empty = not connected yet.
+//   turnstileSiteKey  Cloudflare Turnstile site key (public). When set, the forms show the
+//                     Turnstile check and send its token; the Worker verifies it.
 
 const LANG = "league-registration"
+const CREATE_LANG = "league-creation"
 
 /**
  * The round a new player would join from, or undefined if registration is closed.
@@ -32,7 +36,7 @@ function registrationRound(fm) {
 }
 
 /** Walk an mdast tree, replacing/removing `code` nodes in the registration language. */
-function remarkLeagueRegistration(endpoint, siteKey) {
+function remarkLeagueRegistration(endpoint, createEndpoint, siteKey) {
   return () => (tree, file) => {
     const fm = file.data?.frontmatter ?? {}
     const joinRound = registrationRound(fm)
@@ -47,6 +51,8 @@ function remarkLeagueRegistration(endpoint, siteKey) {
         if (node.type === "code" && node.lang === LANG) {
           if (joinRound) parent.children[i] = formNode(league, folder, endpoint, siteKey, joinRound)
           else parent.children.splice(i, 1)
+        } else if (node.type === "code" && node.lang === CREATE_LANG) {
+          parent.children[i] = creationNode(createEndpoint, siteKey)
         } else {
           visit(node)
         }
@@ -125,16 +131,67 @@ function formNode(league, folder, endpoint, siteKey, joinRound = 1) {
               text("."),
             ]),
           ]),
-          ...(siteKey
-            ? [
-                el("div", { className: ["league-registration-verify"] }, [
-                  el("div", { className: ["league-registration-turnstile"], dataSitekey: siteKey }),
-                  el("p", { className: ["league-registration-check"], ariaLive: "polite" }),
-                ]),
-              ]
-            : []),
+          ...verifyNodes(siteKey, "register"),
           el("div", { className: ["league-registration-actions"] }, [
             el("button", { type: "submit" }, [text("Register")]),
+          ]),
+        ]),
+        el("p", { className: ["league-registration-status"], role: "status", ariaLive: "polite" }),
+      ],
+    },
+  }
+}
+
+/** The Turnstile check and the line for its message (nothing without a site key). */
+function verifyNodes(siteKey, action) {
+  if (!siteKey) return []
+  return [
+    el("div", { className: ["league-registration-verify"] }, [
+      el("div", { className: ["league-registration-turnstile"], dataSitekey: siteKey, dataAction: action }),
+      el("p", { className: ["league-registration-check"], ariaLive: "polite" }),
+    ]),
+  ]
+}
+
+/** The homepage form for creating a league: a season name. The Worker picks the League number. */
+function creationNode(endpoint, siteKey) {
+  const seasonId = "league-creation-season"
+  const seasonCheckId = `${seasonId}-check`
+  const seasonHelpId = `${seasonId}-help`
+  return {
+    type: "leagueCreation",
+    data: {
+      hName: "div",
+      hProperties: {
+        // shares the registration form's styles and client script
+        className: ["league-registration", "league-creation"],
+        dataAction: "create",
+        dataEndpoint: endpoint || undefined,
+      },
+      hChildren: [
+        el("form", { className: ["league-registration-form"], noValidate: true }, [
+          el("div", { className: ["league-registration-field"] }, [
+            el("label", { htmlFor: seasonId }, [text("Season name")]),
+            el("input", {
+              id: seasonId,
+              type: "text",
+              name: "season",
+              required: true,
+              maxLength: 60,
+              autoComplete: "off",
+              placeholder: "e.g. 2027 Summer",
+              ariaDescribedby: `${seasonCheckId} ${seasonHelpId}`,
+            }),
+            el("p", { id: seasonCheckId, className: ["league-registration-check"], ariaLive: "polite" }),
+            el("p", { id: seasonHelpId, className: ["league-registration-help"] }, [
+              text(
+                "The league is named for you (the next League number). The number of rounds is set when the first round is drawn, based on how many players have registered.",
+              ),
+            ]),
+          ]),
+          ...verifyNodes(siteKey, "create_league"),
+          el("div", { className: ["league-registration-actions"] }, [
+            el("button", { type: "submit" }, [text("Create league")]),
           ]),
         ]),
         el("p", { className: ["league-registration-status"], role: "status", ariaLive: "polite" }),
@@ -151,6 +208,9 @@ const clientScript = `
   window.__leagueRegistration = true
 
   const NAME = /^[\\p{L}\\p{N}][\\p{L}\\p{N} '\\-.]{0,39}$/u
+  // Same rule and message as the Worker (worker/index.ts SEASON)
+  const SEASON = /^[\\p{L}\\p{N}][\\p{L}\\p{N} '\\-.,&()/]{0,59}$/u
+  const SEASON_ERROR = "Season names can use letters, numbers, spaces and - ' . , & ( ) / (max 60)."
   // Same rules and messages as the Worker (worker/index.ts checkArmyLink)
   const ARMY_ERRORS = {
     missing: "Please enter your army link.",
@@ -198,7 +258,7 @@ const clientScript = `
     for (const slot of slots) {
       slot.dataset.widgetId = window.turnstile.render(slot, {
         sitekey: slot.dataset.sitekey,
-        action: "register",
+        action: slot.dataset.action || "register",
         callback: () => showVerifyMessage(slot, ""),
         "expired-callback": () => showVerifyMessage(slot, "Please complete the verification check."),
       })
@@ -230,7 +290,12 @@ const clientScript = `
   // --- Field checks: each field shows its own message directly under its input ---
   const cleanName = (value) => value.trim().replace(/\\s+/g, " ")
   const fieldError = (input) => {
-    const value = input.name === "name" ? cleanName(input.value) : input.value.trim()
+    const value = input.name === "armyLink" ? input.value.trim() : cleanName(input.value)
+    if (input.name === "season") {
+      if (!value) return "Please enter a season name."
+      if (!SEASON.test(value)) return SEASON_ERROR
+      return null
+    }
     if (input.name === "name") {
       if (!value) return "Please enter your name."
       if (!NAME.test(value)) return "Names can use letters, numbers, spaces, hyphens, apostrophes and full stops (max 40)."
@@ -284,9 +349,10 @@ const clientScript = `
 
     const root = form.closest(".league-registration")
     const status = root.querySelector(".league-registration-status")
-    const input = form.querySelector("input[name=name]")
     const button = form.querySelector("button")
-    const name = cleanName(input.value)
+    const creating = root.dataset.action === "create"
+    const input = form.querySelector(creating ? "input[name=season]" : "input[name=name]")
+    const value = cleanName(input.value)
     const armyLink = (form.querySelector("input[name=armyLink]")?.value ?? "").trim()
     const say = (message, kind) => {
       status.textContent = message
@@ -311,28 +377,35 @@ const clientScript = `
     const endpoint = root.dataset.endpoint
     if (!endpoint) {
       return say(
-        "Thanks, " + name + "! Online registration isn't connected yet, so please let the organiser know you'd like to join.",
+        creating
+          ? "Creating leagues online isn't connected yet, so please ask the organiser to set it up."
+          : "Thanks, " + value + "! Online registration isn't connected yet, so please let the organiser know you'd like to join.",
         "info",
       )
     }
 
     button.disabled = true
-    say("Registering…", "info")
+    say(creating ? "Creating league…" : "Registering…", "info")
     try {
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ league: root.dataset.league, name, armyLink, turnstileToken }),
+        body: JSON.stringify(
+          creating
+            ? { season: value, turnstileToken }
+            : { league: root.dataset.league, name: value, armyLink, turnstileToken },
+        ),
       })
+      const data = await res.json().catch(() => null)
       if (!res.ok) {
-        const data = await res.json().catch(() => null)
         const message = (data && data.error) || res.statusText || "unknown error"
         if (res.status === 403 && slot) {
           showVerifyMessage(slot, message)
           say("Please fix the errors above.", "error")
           return
         }
-        if (res.status === 409) {
+        // registration: the name is taken or already waiting; creation: a bad season name
+        if ((!creating && res.status === 409) || (creating && res.status === 400)) {
           showFieldMessage(input, message, "error")
           input.focus()
           say("Please fix the errors above.", "error")
@@ -341,9 +414,21 @@ const clientScript = `
         throw new Error(message)
       }
       form.reset()
-      say("Thanks, " + name + "! Your registration has been sent and will appear once it's approved.", "success")
+      if (creating) {
+        say(data.league + " has been created! It will be on the site in a few minutes: ", "success")
+        const link = document.createElement("a")
+        link.href = data.url
+        link.textContent = "go to " + data.league
+        status.append(link, ".")
+      } else {
+        say("Thanks, " + value + "! Your registration has been sent and will appear once it's approved.", "success")
+      }
     } catch (err) {
-      say("Sorry, registration failed: " + (err && err.message ? err.message : "unknown error"), "error")
+      say(
+        (creating ? "Sorry, creating the league failed: " : "Sorry, registration failed: ") +
+          (err && err.message ? err.message : "unknown error"),
+        "error",
+      )
     } finally {
       button.disabled = false
       // tokens are single-use: get a fresh one for any further attempt
@@ -386,11 +471,12 @@ const css = `
 
 export const LeagueRegistration = (opts = {}) => {
   const endpoint = typeof opts.endpoint === "string" ? opts.endpoint.trim() : ""
+  const createEndpoint = typeof opts.createEndpoint === "string" ? opts.createEndpoint.trim() : ""
   const siteKey = typeof opts.turnstileSiteKey === "string" ? opts.turnstileSiteKey.trim() : ""
   return {
     name: "LeagueRegistration",
     markdownPlugins() {
-      return [remarkLeagueRegistration(endpoint, siteKey)]
+      return [remarkLeagueRegistration(endpoint, createEndpoint, siteKey)]
     },
     externalResources() {
       return {

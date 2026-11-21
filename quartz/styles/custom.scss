@@ -37,6 +37,21 @@ figure:has(> pre[data-language="league-registration"]) {
   display: none;
 }
 
+// League creation (homepage): same idea for the ```league-creation block. Until a plugin
+// renders it as an element with class `league-creation`, hide the raw block, and hide the
+// "Create a league" heading (and its table-of-contents link) when nothing follows it.
+figure:has(> pre[data-language="league-creation"]) {
+  display: none;
+}
+
+h2#create-a-league:not(:has(+ .league-creation)) {
+  display: none;
+}
+
+:root:has(h2#create-a-league:not(:has(+ .league-creation))) a[href="#create-a-league"] {
+  display: none;
+}
+
 // League pages (the ones with a Leaderboard): hide the folder listing
 // ("N items under this folder" + links to Pairings / Registered Players / Results)
 :root:has(h2#leaderboard) .page-listing {

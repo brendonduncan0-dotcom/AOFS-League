@@ -1,7 +1,19 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
-import worker, { ARMY_LINK_ERRORS, checkArmyLink, frontmatterValue, github, playerNote, register, turnstile, type Env, type GitHub } from "./index.ts"
+import worker, {
+  ARMY_LINK_ERRORS,
+  SEASON_ERROR,
+  checkArmyLink,
+  createLeague,
+  frontmatterValue,
+  github,
+  playerNote,
+  register,
+  turnstile,
+  type Env,
+  type GitHub,
+} from "./index.ts"
 
 const env: Env = {
   ASSETS: { fetch: async () => new Response("asset") },
@@ -26,6 +38,12 @@ function fakeGitHub(files: Record<string, string>, branches: string[] = []) {
       return Object.keys(files)
         .filter((p) => p.startsWith(dir + "/") && !p.slice(dir.length + 1).includes("/"))
         .map((p) => p.slice(dir.length + 1))
+    },
+    async folders(dir) {
+      const names = Object.keys(files)
+        .filter((p) => p.startsWith(dir + "/") && p.slice(dir.length + 1).includes("/"))
+        .map((p) => p.slice(dir.length + 1).split("/")[0])
+      return [...new Set(names)]
     },
     async createBranch(b) {
       if (branches.includes(b)) return false
@@ -293,4 +311,75 @@ test("adds army before tags if the template doesn't have it", () => {
   const old = "---\ntitle:\nleague:\ntags:\n  - player\n---\n"
   const note = playerNote(old, "Alex", "League 2", ARMY)
   assert.match(note, /army: ".+"\ntags:/)
+})
+
+// --- Creating leagues ------------------------------------------------------------------------
+
+const leagueTemplate = readFileSync("content/templates/League.md", "utf8")
+const leagueFiles = (): Record<string, string> => ({
+  ...baseFiles(),
+  "content/Leagues/League 1/League 1.md": upcomingLeague,
+  "content/Leagues/Test League/Test League.md": upcomingLeague,
+  "content/templates/League.md": leagueTemplate,
+})
+
+async function create(body: any, files = leagueFiles(), branches: string[] = []) {
+  const fake = fakeGitHub(files, branches)
+  const withToken = body && typeof body === "object" ? { turnstileToken: "ok", ...body } : body
+  const req = new Request("https://site.example/api/leagues", { method: "POST", body: JSON.stringify(withToken) })
+  const res = await createLeague(req, env, fake.gh, verifyOk)
+  return { status: res.status, body: (await res.json()) as Record<string, string>, ...fake }
+}
+
+test("creates the next numbered league from the template", async () => {
+  const r = await create({ season: "  2027   Summer " })
+  assert.equal(r.status, 200, JSON.stringify(r.body))
+  assert.equal(r.body.league, "League 3")
+  assert.equal(r.body.url, "/leagues/league-3/")
+  assert.deepEqual(r.branches, ["create-league/league-3"])
+  assert.equal(r.written.length, 1)
+  const { path, content, branch } = r.written[0]
+  assert.equal(path, "content/Leagues/League 3/League 3.md")
+  assert.equal(branch, "create-league/league-3")
+  assert.equal(frontmatterValue(content, "title"), "League 3")
+  assert.equal(frontmatterValue(content, "season"), "2027 Summer")
+  assert.equal(frontmatterValue(content, "status"), "Upcoming")
+  assert.equal(frontmatterValue(content, "rounds"), "")
+  assert.equal(frontmatterValue(content, "current_round"), "0")
+  assert.equal(frontmatterValue(content, "registration_open"), "true")
+  assert.match(content, /```league-registration/) // the template's page body comes along
+  assert.equal(r.prs[0].title, "Create League 3 (2027 Summer)")
+})
+
+test("steps past league numbers already waiting for approval", async () => {
+  const r = await create({ season: "Winter" }, leagueFiles(), ["create-league/league-3", "create-league/league-4"])
+  assert.equal(r.status, 200)
+  assert.equal(r.body.league, "League 5")
+})
+
+test("first league is League 1", async () => {
+  const files = { "content/templates/League.md": leagueTemplate }
+  const r = await create({ season: "Opening" }, files)
+  assert.equal(r.body.league, "League 1")
+})
+
+test("rejects missing or invalid season names", async () => {
+  for (const season of ["", "   ", undefined, 42, "<script>", "x".repeat(61), "-dash first"]) {
+    const r = await create({ season })
+    assert.equal(r.status, 400, String(season))
+    assert.equal(r.written.length, 0)
+  }
+  const r = await create({ season: "<b>" })
+  assert.equal(r.body.error, SEASON_ERROR)
+})
+
+test("league creation needs a valid Turnstile token", async () => {
+  const r = await create({ season: "Winter", turnstileToken: "bad" })
+  assert.equal(r.status, 403)
+  assert.equal(r.branches.length, 0)
+})
+
+test("routes POST /api/leagues", async () => {
+  const res = await worker.fetch(new Request("https://site.example/api/leagues"), env)
+  assert.equal(res.status, 405)
 })

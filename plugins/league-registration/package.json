@@ -1,7 +1,7 @@
 {
   "name": "league-registration",
   "version": "0.1.0",
-  "description": "Renders ```league-registration code blocks as a player registration form on upcoming league pages.",
+  "description": "Renders ```league-registration code blocks as a player registration form on league pages, and ```league-creation blocks as a form for creating a league.",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -15,13 +15,14 @@
   "quartz": {
     "name": "league-registration",
     "displayName": "League Registration",
-    "description": "Player registration form for upcoming leagues",
+    "description": "Player registration and league creation forms",
     "category": "transformer",
     "quartzVersion": ">=5.1.0",
     "defaultOrder": 50,
     "defaultEnabled": true,
     "defaultOptions": {
       "endpoint": "",
+      "createEndpoint": "",
       "turnstileSiteKey": ""
     },
     "configSchema": {
@@ -30,6 +31,10 @@
         "endpoint": {
           "type": "string",
           "description": "URL the form POSTs registrations to (the Cloudflare Worker). Leave empty until it exists."
+        },
+        "createEndpoint": {
+          "type": "string",
+          "description": "URL the league creation form POSTs to (the Cloudflare Worker). Leave empty until it exists."
         },
         "turnstileSiteKey": {
           "type": "string",

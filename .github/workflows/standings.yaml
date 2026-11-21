@@ -2,7 +2,7 @@ name: Standings
 
 # Keeps league standings in the repo in sync with the match notes.
 # - Pull requests: check results are valid (no files are changed). Registration PRs from
-#   the Worker that only add one player note are then merged automatically.
+#   the Worker that only add one player note, or one new league note, are then merged automatically.
 # - Pushes to v5: recalculate standings and commit the updated player notes.
 # Cloudflare also runs `npm run standings` in its build, so the live site is always
 # current; this workflow keeps the repo (and your Obsidian vault, after a pull) in step.
@@ -47,15 +47,17 @@ jobs:
       - name: Validate results and preview standings
         run: npm run standings -- --dry
 
-  # Registrations opened by the Worker merge themselves once "Check results" passes, but only
-  # if the PR is a register/* branch in this repo that adds exactly one player note.
+  # PRs opened by the Worker merge themselves once "Check results" passes, but only if the PR
+  # is a branch in this repo that makes exactly the one change the Worker makes:
+  #   register/*       adds one player note:  content/Leagues/<League>/Registered Players/<Name>.md
+  #   create-league/*  adds one league note:  content/Leagues/League N/League N.md
   # Anything else is left open for a person to review.
   automerge:
-    name: Auto-merge registration
+    name: Auto-merge website change
     needs: check
     if: >-
       github.event_name == 'pull_request' &&
-      startsWith(github.head_ref, 'register/') &&
+      (startsWith(github.head_ref, 'register/') || startsWith(github.head_ref, 'create-league/')) &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
@@ -65,14 +67,28 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       PR: ${{ github.event.pull_request.number }}
+      BRANCH: ${{ github.head_ref }}
     steps:
-      - name: Check the PR only adds one player note
+      - name: Check the PR only makes the expected change
         run: |
           changes=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}/files" --paginate --jq '.[] | "\(.status)\t\(.filename)"')
           printf 'Changes:\n%s\n' "$changes"
           count=$(printf '%s\n' "$changes" | grep -c .)
-          if [ "$count" -ne 1 ] || ! printf '%s\n' "$changes" | grep -qE $'^added\tcontent/Leagues/[^/]+/Registered Players/[^/]+\\.md$'; then
-            echo "::notice::Not auto-merging: this PR does more than add one player note. Leaving it for review."
+          status=${changes%%$'\t'*}
+          file=${changes#*$'\t'}
+          ok=false
+          case "$BRANCH" in
+            register/*)
+              what="add one player note"
+              [[ "$file" =~ ^content/Leagues/[^/]+/Registered\ Players/[^/]+\.md$ ]] && ok=true ;;
+            create-league/*)
+              what="add one league note"
+              # content/Leagues/League N/League N.md, with the same N twice
+              if [[ "$file" =~ ^content/Leagues/League\ ([1-9][0-9]*)/League\ ([1-9][0-9]*)\.md$ ]] &&
+                 [ "${BASH_REMATCH[1]}" = "${BASH_REMATCH[2]}" ]; then ok=true; fi ;;
+          esac
+          if [ "$count" -ne 1 ] || [ "$status" != "added" ] || [ "$ok" != true ]; then
+            echo "::notice::Not auto-merging: this PR does more than ${what}. Leaving it for review."
             exit 1
           fi
       - name: Merge and delete the branch

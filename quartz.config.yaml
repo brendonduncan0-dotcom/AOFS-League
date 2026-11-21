@@ -247,6 +247,7 @@ plugins:
     enabled: true
     options:
       endpoint: /api/register
+      createEndpoint: /api/leagues
       # Cloudflare Turnstile site key (public, safe to commit)
       turnstileSiteKey: "0x4AAAAAAGLJENNAXP6DjRuB"
     order: 50

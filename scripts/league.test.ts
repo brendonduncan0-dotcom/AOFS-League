@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { pairKey, pairingState, shuffle, swissPair } from "./lib/league.ts"
+import { pairKey, pairingState, shuffle, swissPair, swissRounds } from "./lib/league.ts"
 
 const meetingsOf = (...pairs: [string, string][]) => {
   const m = new Map<string, number>()
@@ -121,4 +121,9 @@ test("a protected player (late joiner's first round) never gets the bye", () => 
 test("if every player is protected, the normal bye rule still applies", () => {
   const r = swissPair({ order: ["A", "B", "C"], meetings: new Map(), byes: noByes, noBye: new Set(["A", "B", "C"]) })
   assert.equal(r.bye, "C")
+})
+
+test("swissRounds: enough rounds for a single unbeaten player", () => {
+  const cases: [number, number][] = [[1, 1], [2, 1], [3, 2], [4, 2], [5, 3], [8, 3], [9, 4], [16, 4], [17, 5]]
+  for (const [players, rounds] of cases) assert.equal(swissRounds(players), rounds, `${players} players`)
 })

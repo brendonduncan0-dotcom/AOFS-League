@@ -83,3 +83,8 @@ views:
       - formula.registration
       - winner
 ```
+
+## Create a league
+
+```league-creation
+```

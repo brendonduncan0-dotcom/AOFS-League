@@ -454,6 +454,13 @@ export type PairingInput = {
 
 export type PairingResult = { pairs: [string, string][]; bye?: string; rematches: number }
 
+/**
+ * Rounds for a Swiss league, set when round 1 is drawn: enough rounds for one player to be
+ * the only one left unbeaten (log2 of the player count, rounded up). 2 players: 1 round,
+ * 3-4: 2, 5-8: 3, 9-16: 4, 17-32: 5.
+ */
+export const swissRounds = (players: number) => Math.max(1, Math.ceil(Math.log2(Math.max(players, 1))))
+
 export const pairKey = (a: string, b: string) => [a, b].sort().join("\u0000")
 
 /**

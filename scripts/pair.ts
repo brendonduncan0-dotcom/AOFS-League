@@ -5,7 +5,8 @@
  *        npm run pair -- "League 2" --dry    show what would happen, write nothing
  *
  * League note properties used:
- *   rounds         total rounds in the league (required)
+ *   rounds         total rounds in the league; leave blank before the league starts and it is
+ *                  set when round 1 is drawn, from the players taking part (see swissRounds)
  *   current_round  0 before the league starts
  *   status         Upcoming -> Active on round 1; Active -> Completed after the final round
  *   winner         set when the league completes
@@ -36,6 +37,7 @@ import {
   rel,
   shuffle,
   swissPair,
+  swissRounds,
   syncPairings,
   toNumber,
   writeFrontmatter,
@@ -54,9 +56,18 @@ if (!leagueName) {
 const league = readLeague(path.join(LEAGUES_DIR, leagueName))
 const where = rel(league.noteFile)
 if (league.completed) throw new Error(`${where}: league is already Completed`)
-const totalRounds = toNumber(league.data.rounds, `${where} rounds`)
-if (!Number.isInteger(totalRounds) || totalRounds < 1) throw new Error(`${where}: rounds must be a whole number from 1`)
 const current = league.currentRound
+// rounds is blank until the league starts: round 1 sets it from the players taking part
+const roundsBlank = league.data.rounds === undefined || league.data.rounds === null || league.data.rounds === ""
+let totalRounds: number
+if (roundsBlank && current === 0) {
+  const starting = [...league.players.values()].filter((p) => !p.dropped && p.joinedRound <= 1).length
+  totalRounds = swissRounds(starting)
+  console.log(`\n${starting} players: setting rounds to ${totalRounds}.`)
+} else {
+  totalRounds = toNumber(league.data.rounds, `${where} rounds`)
+}
+if (!Number.isInteger(totalRounds) || totalRounds < 1) throw new Error(`${where}: rounds must be a whole number from 1`)
 if (current > totalRounds) throw new Error(`${where}: current_round (${current}) is past rounds (${totalRounds})`)
 
 const playerLink = (name: string) => noteLink(league.players.get(name)!.file)
@@ -132,7 +143,10 @@ if (current === totalRounds) {
     })
   }
   leagueUpdates.current_round = next
-  if (current === 0) leagueUpdates.status = "Active"
+  if (current === 0) {
+    leagueUpdates.status = "Active"
+    leagueUpdates.rounds = totalRounds
+  }
 
   console.log(`\nRound ${next} of ${totalRounds} pairings${next === 1 ? " (random draw)" : ""}:`)
   for (const [a, b] of result.pairs) console.log(`  ${a} vs ${b}`)
