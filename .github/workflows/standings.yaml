@@ -1,7 +1,8 @@
 name: Standings
 
 # Keeps league standings in the repo in sync with the match notes.
-# - Pull requests: check results are valid (no files are changed).
+# - Pull requests: check results are valid (no files are changed). Registration PRs from
+#   the Worker that only add one player note are then merged automatically.
 # - Pushes to v5: recalculate standings and commit the updated player notes.
 # Cloudflare also runs `npm run standings` in its build, so the live site is always
 # current; this workflow keeps the repo (and your Obsidian vault, after a pull) in step.
@@ -45,6 +46,41 @@ jobs:
         run: npx tsx --test scripts/league.test.ts worker/index.test.ts
       - name: Validate results and preview standings
         run: npm run standings -- --dry
+
+  # Registrations opened by the Worker merge themselves once "Check results" passes, but only
+  # if the PR is a register/* branch in this repo that adds exactly one player note.
+  # Anything else is left open for a person to review.
+  automerge:
+    name: Auto-merge registration
+    needs: check
+    if: >-
+      github.event_name == 'pull_request' &&
+      startsWith(github.head_ref, 'register/') &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ github.event.pull_request.number }}
+    steps:
+      - name: Check the PR only adds one player note
+        run: |
+          changes=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}/files" --paginate --jq '.[] | "\(.status)\t\(.filename)"')
+          printf 'Changes:\n%s\n' "$changes"
+          count=$(printf '%s\n' "$changes" | grep -c .)
+          if [ "$count" -ne 1 ] || ! printf '%s\n' "$changes" | grep -qE $'^added\tcontent/Leagues/[^/]+/Registered Players/[^/]+\\.md$'; then
+            echo "::notice::Not auto-merging: this PR does more than add one player note. Leaving it for review."
+            exit 1
+          fi
+      - name: Merge and delete the branch
+        run: gh pr merge "$PR" --repo "$GITHUB_REPOSITORY" --squash --delete-branch
+      - name: Update standings on v5
+        # A merge made with the workflow token doesn't start other workflows by itself,
+        # so start the standings update explicitly.
+        run: gh workflow run standings.yaml --repo "$GITHUB_REPOSITORY" --ref "${{ github.event.pull_request.base.ref }}"
 
   update:
     name: Update standings
