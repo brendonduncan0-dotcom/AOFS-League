@@ -1,10 +1,10 @@
 ---
 title: League 2
 description:
-status: Upcoming
+status: "Active"
 season: 2026 Christmas
 rounds: 3
-current_round: 0
+current_round: 1
 registration_open: true
 winner:
 player_count: 2
