@@ -9,7 +9,11 @@ tsconfig.tsbuildinfo
 private/
 .replit
 replit.nix
-.quartz/
+# .quartz/ is generated, except the committed link to our local plugin (see quartz.lock.json)
+.quartz/*
+!.quartz/plugins/
+.quartz/plugins/*
+!.quartz/plugins/league-registration
 quartz/cli/tui/dist/
 .turbo/
 .wrangler/
