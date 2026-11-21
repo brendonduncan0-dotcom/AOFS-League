@@ -32,12 +32,24 @@
       "label": "Commit & Push",
       "detail": "Stage all changes, commit with a message, and push to GitHub",
       "type": "shell",
-      "command": "git add -A && git status --short && if git diff --cached --quiet; then echo 'Nothing new to commit.'; else git commit -m \"$COMMIT_MSG\"; fi && echo 'Pulling latest changes from GitHub...' && { git pull --rebase origin \"$(git branch --show-current)\" || { echo 'Pull stopped on a conflict: nothing was pushed. Resolve the conflict and run git rebase --continue, or undo the pull with git rebase --abort.'; exit 1; }; } && git push -u origin HEAD",
+      "command": "git add -A && git status --short && if git diff --cached --quiet; then echo 'Nothing new to commit.'; else git commit -m \"$COMMIT_MSG\"; fi && echo 'Pulling latest changes from GitHub...' && { git pull --rebase origin \"$(git branch --show-current)\" || { echo 'Pull stopped on a conflict: nothing was pushed. Resolve the conflict and run git rebase --continue, or undo the pull with git rebase --abort.'; false; }; } && git push -u origin HEAD",
       "options": {
         "env": {
           "COMMIT_MSG": "${input:commitMessage}"
         }
       },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Pull from GitHub",
+      "detail": "Update local files from GitHub (keeps your local changes)",
+      "type": "shell",
+      "command": "old=$(git rev-parse HEAD) && echo 'Pulling latest changes from GitHub...' && { git pull --rebase --autostash origin \"$(git branch --show-current)\" || { echo 'Pull stopped on a conflict. Resolve it and run git rebase --continue, or undo with git rebase --abort.'; false; }; } && { git diff --quiet \"$old\" HEAD -- package-lock.json || { echo 'Dependencies changed on GitHub: reinstalling...' && npm ci --no-audit --no-fund; }; } && { [ \"$old\" = \"$(git rev-parse HEAD)\" ] && echo 'Already up to date with GitHub.' || { echo 'New from GitHub:' && git log --oneline --no-decorate \"$old\"..HEAD | sed 's/^/  /'; }; }",
       "presentation": {
         "reveal": "always",
         "panel": "shared",

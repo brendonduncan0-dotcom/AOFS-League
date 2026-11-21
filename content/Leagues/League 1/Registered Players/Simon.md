@@ -1,17 +1,19 @@
 ---
 title: Simon
 league: "[[League 1]]"
+status: active
+joined_round: 1
 army:
-wins: 1
-losses: 4
 rank: 5
+rank_label: "5"
+position: 6
 avg_vp: 6.4
 games: 5
 vp_total: 32
+wins: 1
+losses: 4
 byes: 0
 opp_avg_vp: 9.2
-position: 6
-rank_label: "5"
 tags:
   - player
 ---

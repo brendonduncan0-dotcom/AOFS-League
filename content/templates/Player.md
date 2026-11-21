@@ -4,6 +4,16 @@ league:
 status: active
 joined_round: 1
 army:
+rank:
+rank_label:
+position:
+avg_vp:
+games:
+vp_total:
+wins:
+losses:
+byes:
+opp_avg_vp:
 tags:
   - player
 ---

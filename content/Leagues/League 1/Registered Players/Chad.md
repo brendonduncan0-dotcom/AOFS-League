@@ -1,17 +1,19 @@
 ---
 title: Chad
 league: "[[League 1]]"
+status: active
+joined_round: 1
 army:
-wins: 3
-losses: 2
 rank: 3
+rank_label: "3"
+position: 3
 avg_vp: 11.4
 games: 5
 vp_total: 57
+wins: 3
+losses: 2
 byes: 0
 opp_avg_vp: 9.29
-position: 3
-rank_label: "3"
 tags:
   - player
 ---

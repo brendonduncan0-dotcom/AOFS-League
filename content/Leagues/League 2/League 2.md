@@ -45,15 +45,17 @@ filters:
     - file.hasTag("player")
     - status != "dropped"
     - this.status == "Upcoming"
+formulas:
+  army_link: if(army, link(army, "View list"), "")
 properties:
-  army:
-    displayName: Army
+  formula.army_link:
+    displayName: Army link
 views:
   - type: table
     name: Registered Players
     order:
       - file.name
-      - army
+      - formula.army_link
     sort:
       - property: file.name
         direction: ASC

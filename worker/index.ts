@@ -2,7 +2,8 @@
  * AOFS League Worker.
  *
  * Serves the static site (Quartz build in public/) and handles the site's API:
- *   POST /api/register   { league: "Leagues/League 2", name: "Alex", turnstileToken: "…" }
+ *   POST /api/register   { league: "Leagues/League 2", name: "Alex", armyLink?: "https://army-forge…",
+ *                          turnstileToken: "…" }
  *     -> opens a GitHub pull request adding Leagues/League 2/Registered Players/Alex.md
  *
  * Configuration (wrangler.jsonc):
@@ -23,6 +24,44 @@ export interface Env {
 /** Same rule as the form: letters/numbers first, then letters, numbers, space ' - . (max 40). */
 const NAME = /^[\p{L}\p{N}][\p{L}\p{N} '\-.]{0,39}$/u
 /** League folders live directly under Leagues/, e.g. "Leagues/League 2". */
+/**
+ * Army Forge share links only (optional field): https://army-forge.onepagerules.com/share?id=…
+ * Other Army Forge pages (e.g. the builder) only work for the person who made the list.
+ * Returns the cleaned URL ("" if none given) or a message explaining what's wrong.
+ */
+export const ARMY_LINK_ERRORS = {
+  site: "That isn't an Army Forge link.",
+  builder: "That's your builder link, which only works for you.",
+  view: "That's a viewer link, which others can't open.",
+  other: "That's not the right Army Forge link.",
+  id: "That link is incomplete.",
+  long: "That link is too long.",
+}
+export function checkArmyLink(value: unknown): { url: string } | { error: string } {
+  if (value === undefined || value === null) return { url: "" }
+  if (typeof value !== "string") return { error: ARMY_LINK_ERRORS.site }
+  const raw = value.trim()
+  if (raw === "") return { url: "" }
+  if (raw.length > 500) return { error: ARMY_LINK_ERRORS.long }
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return { error: ARMY_LINK_ERRORS.site }
+  }
+  if (url.protocol !== "https:" || url.hostname !== "army-forge.onepagerules.com") {
+    return { error: ARMY_LINK_ERRORS.site }
+  }
+  const path = url.pathname.replace(/\/+$/, "")
+  if (path !== "/share") {
+    if (path === "/view" || path.startsWith("/view/")) return { error: ARMY_LINK_ERRORS.view }
+    if (path.split("/").includes("build")) return { error: ARMY_LINK_ERRORS.builder }
+    return { error: ARMY_LINK_ERRORS.other }
+  }
+  if (!url.searchParams.get("id")?.trim()) return { error: ARMY_LINK_ERRORS.id }
+  return { url: url.toString() }
+}
+
 const LEAGUE = /^Leagues\/[\p{L}\p{N}][\p{L}\p{N} '\-.]{0,79}$/u
 
 export default {
@@ -56,7 +95,7 @@ export async function register(
     if (!env.GITHUB_TOKEN) throw new Error("GITHUB_TOKEN secret is not set")
     if (!env.TURNSTILE_SECRET) throw new Error("TURNSTILE_SECRET secret is not set")
     const body = (await request.json().catch(() => null)) as
-      | { league?: unknown; name?: unknown; turnstileToken?: unknown }
+      | { league?: unknown; name?: unknown; armyLink?: unknown; turnstileToken?: unknown }
       | null
 
     // Human check first, before touching GitHub
@@ -72,6 +111,9 @@ export async function register(
     if (!NAME.test(name)) {
       throw new UserError("Names can use letters, numbers, spaces, hyphens, apostrophes and full stops (max 40).")
     }
+    const army = checkArmyLink(body?.armyLink)
+    if ("error" in army) throw new UserError(army.error)
+    const armyLink = army.url
 
     const leagueName = league.split("/").pop()!
     const leagueNote = await gh.file(`content/${league}/${leagueName}.md`)
@@ -91,7 +133,7 @@ export async function register(
 
     const template = await gh.file("content/templates/Player.md")
     if (template === null) throw new Error("content/templates/Player.md is missing")
-    const note = playerNote(template, name, leagueName)
+    const note = playerNote(template, name, leagueName, armyLink)
     const path = `${playersDir}/${name}.md`
     await gh.putFile(path, note, branch, `Register ${name} for ${leagueName}`)
     const pr = await gh.openPullRequest(
@@ -112,16 +154,21 @@ export async function register(
 }
 
 /** Fill the Player template's frontmatter for a new registration. */
-export function playerNote(template: string, name: string, leagueName: string): string {
-  const set = (src: string, key: string, value: string) =>
-    new RegExp(`^${key}:.*$`, "m").test(src)
-      ? src.replace(new RegExp(`^${key}:.*$`, "m"), `${key}: ${value}`)
-      : src
+export function playerNote(template: string, name: string, leagueName: string, armyLink = ""): string {
+  // replace `key:` in the frontmatter, or add it before `tags:` if the template lacks it
+  // (function replacements, so `$` in values like URLs is never treated as a pattern)
+  const set = (src: string, key: string, value: string) => {
+    const line = `${key}: ${value}`
+    const existing = new RegExp(`^${key}:.*$`, "m")
+    if (existing.test(src)) return src.replace(existing, () => line)
+    return src.replace(/^tags:/m, () => `${line}\ntags:`)
+  }
   let out = template
   out = set(out, "title", JSON.stringify(name))
   out = set(out, "league", JSON.stringify(`[[${leagueName}]]`))
   out = set(out, "status", "active")
   out = set(out, "joined_round", "1")
+  if (armyLink) out = set(out, "army", JSON.stringify(armyLink))
   return out
 }
 

@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
-import worker, { frontmatterValue, github, playerNote, register, turnstile, type Env, type GitHub } from "./index.ts"
+import worker, { ARMY_LINK_ERRORS, checkArmyLink, frontmatterValue, github, playerNote, register, turnstile, type Env, type GitHub } from "./index.ts"
 
 const env: Env = {
   ASSETS: { fetch: async () => new Response("asset") },
@@ -197,4 +197,75 @@ test("GitHub client: sends authenticated requests and base64-encodes the new fil
   assert.equal(calls[2].url, "https://api.github.com/repos/owner/repo/contents/content/Leagues/League%202/Registered%20Players/Zo%C3%AB.md")
   assert.equal(Buffer.from(calls[2].body.content, "base64").toString("utf8"), "title: Zoë")
   assert.equal(calls[3].body.base, "v5")
+})
+
+const ARMY = "https://army-forge.onepagerules.com/share?id=AbC123&name=My%20List"
+
+test("stores the Army Forge link in the army property", async () => {
+  const r = await call({ league: "Leagues/League 2", name: "Alex", armyLink: `  ${ARMY}  ` })
+  assert.equal(r.status, 200)
+  assert.equal(frontmatterValue(r.written[0].content, "army"), ARMY)
+})
+
+test("army link is optional", async () => {
+  const r = await call({ league: "Leagues/League 2", name: "Alex", armyLink: "" })
+  assert.equal(r.status, 200)
+  assert.equal(frontmatterValue(r.written[0].content, "army") ?? "", "")
+})
+
+test("army link must be an Army Forge share link, with a message for each mistake", async () => {
+  const cases: [unknown, keyof typeof ARMY_LINK_ERRORS][] = [
+    ["https://evil.example/?u=army-forge.onepagerules.com", "site"],
+    ["https://army-forge.onepagerules.com.evil.example/share?id=x", "site"],
+    ["http://army-forge.onepagerules.com/share?id=x", "site"],
+    ["javascript:alert(1)", "site"],
+    ["not a url", "site"],
+    [42, "site"],
+    // the builder / other Army Forge pages only work for the list's owner
+    // a real builder URL (game system / build / list id)
+    ["https://army-forge.onepagerules.com/list/age-of-fantasy-skirmish/build/SmegSIXvsgfX", "builder"],
+    // the list viewer (shortened link) doesn't open the list for others either
+    ["https://army-forge.onepagerules.com/view/age-of-fantasy-skirmish", "view"],
+    ["https://army-forge.onepagerules.com/view/age-of-fantasy-skirmish/AbC123", "view"],
+    ["https://army-forge.onepagerules.com/view?id=AbC123", "view"],
+    // any other Army Forge page
+    ["https://army-forge.onepagerules.com/listBuilder?listId=AbC123", "other"],
+    ["https://army-forge.onepagerules.com/list?id=AbC123", "other"],
+    ["https://army-forge.onepagerules.com/", "other"],
+    ["https://army-forge.onepagerules.com/viewer", "other"],
+    ["https://army-forge.onepagerules.com/share", "id"],
+    ["https://army-forge.onepagerules.com/share?id=", "id"],
+    ["https://army-forge.onepagerules.com/share?name=Test", "id"],
+    ["https://army-forge.onepagerules.com/share?id=" + "x".repeat(600), "long"],
+  ]
+  for (const [armyLink, kind] of cases) {
+    const r = await call({ league: "Leagues/League 2", name: "Alex", armyLink })
+    assert.equal(r.status, 400, String(armyLink))
+    assert.equal(r.body.error, ARMY_LINK_ERRORS[kind], String(armyLink))
+    assert.equal(r.written.length, 0)
+  }
+})
+
+test("accepts share links, including a trailing slash and extra parameters", () => {
+  for (const ok of [
+    "https://army-forge.onepagerules.com/share?id=AbC123",
+    "https://army-forge.onepagerules.com/share/?id=AbC123",
+    "https://army-forge.onepagerules.com/share?id=AbC123&name=My%20List",
+  ]) {
+    assert.ok("url" in checkArmyLink(ok), ok)
+  }
+})
+
+test("army link URLs with $ and quotes are written safely", () => {
+  const checked = checkArmyLink("https://army-forge.onepagerules.com/share?id=a$&b='c\"d")
+  assert.ok("url" in checked)
+  const note = playerNote(template, "Alex", "League 2", checked.url)
+  assert.equal(frontmatterValue(note, "army"), checked.url)
+  assert.match(note, /^title: "Alex"$/m)
+})
+
+test("adds army before tags if the template doesn't have it", () => {
+  const old = "---\ntitle:\nleague:\ntags:\n  - player\n---\n"
+  const note = playerNote(old, "Alex", "League 2", ARMY)
+  assert.match(note, /army: ".+"\ntags:/)
 })

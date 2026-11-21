@@ -1,18 +1,19 @@
 ---
 title: Grae
 league: "[[League 1]]"
+status: active
 joined_round: 2
 army:
-wins: 1
-losses: 2
 rank: 6
+rank_label: "6 - tied"
+position: 7
 avg_vp: 6
 games: 3
 vp_total: 18
+wins: 1
+losses: 2
 byes: 1
 opp_avg_vp: 10.73
-position: 7
-rank_label: "6 - tied"
 tags:
   - player
 ---

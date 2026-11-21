@@ -1,17 +1,19 @@
 ---
 title: Mira
 league: "[[League 1]]"
+status: active
+joined_round: 1
 army:
-wins: 2
-losses: 3
 rank: 4
+rank_label: "4 - tied"
+position: 4
 avg_vp: 7.8
 games: 5
 vp_total: 39
+wins: 2
+losses: 3
 byes: 0
 opp_avg_vp: 7.89
-position: 4
-rank_label: "4 - tied"
 tags:
   - player
 ---

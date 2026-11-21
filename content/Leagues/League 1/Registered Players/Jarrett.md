@@ -1,17 +1,19 @@
 ---
 title: Jarrett
 league: "[[League 1]]"
+status: active
+joined_round: 1
 army:
-wins: 1
-losses: 3
 rank: 6
+rank_label: "6 - tied"
+position: 8
 avg_vp: 6
 games: 4
 vp_total: 24
+wins: 1
+losses: 3
 byes: 1
 opp_avg_vp: 8.81
-position: 8
-rank_label: "6 - tied"
 tags:
   - player
 ---

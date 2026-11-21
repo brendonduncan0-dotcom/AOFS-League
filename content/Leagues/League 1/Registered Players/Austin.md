@@ -1,18 +1,19 @@
 ---
 title: Austin
 league: "[[League 1]]"
+status: active
 joined_round: 2
 army:
-wins: 4
-losses: 0
 rank: 1
+rank_label: "1"
+position: 1
 avg_vp: 13.25
 games: 4
 vp_total: 53
+wins: 4
+losses: 0
 byes: 0
 opp_avg_vp: 9.55
-position: 1
-rank_label: "1"
 tags:
   - player
 ---

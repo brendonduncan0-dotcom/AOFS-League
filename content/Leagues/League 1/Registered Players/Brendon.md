@@ -1,17 +1,19 @@
 ---
 title: Brendon
 league: "[[League 1]]"
+status: active
+joined_round: 1
 army:
-wins: 4
-losses: 1
 rank: 2
+rank_label: "2"
+position: 2
 avg_vp: 13
 games: 5
 vp_total: 65
+wins: 4
+losses: 1
 byes: 0
 opp_avg_vp: 8.97
-position: 2
-rank_label: "2"
 tags:
   - player
 ---

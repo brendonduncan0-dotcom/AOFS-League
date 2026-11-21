@@ -371,8 +371,14 @@ export function printStandings(title: string, table: Stats[]) {
   )
 }
 
+/** Defaults every player note should have; added only when missing (never overwritten). */
+const PLAYER_DEFAULTS: Record<string, string | number> = { status: "active", joined_round: 1 }
+
 export function writeStandings(table: Stats[]) {
   for (const s of table) {
+    const fm = matter(fs.readFileSync(s.file, "utf8")).data
+    const missing = Object.fromEntries(Object.entries(PLAYER_DEFAULTS).filter(([k]) => !(k in fm)))
+    if (Object.keys(missing).length) writeFrontmatter(s.file, missing)
     writeFrontmatter(s.file, {
       rank: s.rank,
       rank_label: s.rankLabel,
