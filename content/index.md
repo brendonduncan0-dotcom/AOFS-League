@@ -1,5 +1,6 @@
 ---
 title: AOFS League
+enableToc: false
 ---
 
 ## Active leagues

@@ -12,8 +12,10 @@
 //   endpoint          Registration URL; receives JSON { league, name, armyLink, turnstileToken },
 //                     where league is the league's folder (e.g. "Leagues/League 2").
 //   createEndpoint    League creation URL; receives JSON { season, turnstileToken }.
-//   turnstileSiteKey  Cloudflare Turnstile site key (public). When set, the forms show the
-//                     Turnstile check and send its token; the Worker verifies it.
+//   turnstileSiteKey  Cloudflare Turnstile site key (public). When set, the forms run the
+//                     Turnstile check hidden in the background (it only shows itself if
+//                     Cloudflare needs the visitor to interact) and send its token; the
+//                     Worker verifies it.
 // An empty endpoint means "not connected yet": the form still checks its fields and says so.
 
 const REGISTER_LANG = "league-registration"
@@ -173,6 +175,8 @@ const clientScript = `
     long: "That link is too long.",
   }
   const VERIFY = "Please complete the verification check."
+  const VERIFY_BLOCKED = "The verification check couldn't load. Please allow challenges.cloudflare.com (e.g. in your ad blocker) or try another browser."
+  const VERIFY_ERROR = "The verification check couldn't run. Please refresh the page and try again."
   const FIX = "Please fix the errors above."
 
   const clean = (value) => value.trim().replace(/\\s+/g, " ")
@@ -285,7 +289,32 @@ const clientScript = `
     return !error
   }
 
-  // --- Cloudflare Turnstile (explicit rendering, so it works with Quartz's SPA navigation) ---
+  // --- Cloudflare Turnstile: hidden (appearance "interaction-only"). It runs in the background
+  // as soon as the page loads, and only shows itself if Cloudflare needs the visitor to
+  // interact. Explicit rendering, so it works with Quartz's SPA navigation. ---
+  const waiting = new Map() // slot -> callbacks waiting for its next token
+  const tokenArrived = (slot, token) => {
+    for (const done of waiting.get(slot) ?? []) done(token)
+    waiting.delete(slot)
+  }
+  /** The slot's token, waiting up to ms for the background check to finish. "" if none. */
+  const getToken = (slot, ms = 8000) => {
+    const id = slot.dataset.widgetId
+    const now = window.turnstile && id ? window.turnstile.getResponse(id) : ""
+    if (now) return Promise.resolve(now)
+    if (slot.dataset.failed) return Promise.resolve("") // it already reported an error
+    return new Promise((resolve) => {
+      const done = (token) => {
+        clearTimeout(timer)
+        resolve(token || "")
+      }
+      const timer = setTimeout(() => {
+        waiting.set(slot, (waiting.get(slot) ?? []).filter((d) => d !== done))
+        resolve(window.turnstile && id ? window.turnstile.getResponse(id) || "" : "")
+      }, ms)
+      waiting.set(slot, [...(waiting.get(slot) ?? []), done])
+    })
+  }
   const TURNSTILE_SRC = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
   const renderWidgets = () => {
     const slots = document.querySelectorAll(".league-registration-turnstile:not([data-widget-id])")
@@ -306,8 +335,18 @@ const clientScript = `
       slot.dataset.widgetId = window.turnstile.render(slot, {
         sitekey: slot.dataset.sitekey,
         action: slot.closest(".league-registration")?.dataset.action === "create" ? "create_league" : "register",
-        callback: () => showVerifyMessage(slot, ""),
-        "expired-callback": () => showVerifyMessage(slot, VERIFY),
+        appearance: "interaction-only",
+        "refresh-expired": "auto",
+        callback: (token) => {
+          delete slot.dataset.failed
+          showVerifyMessage(slot, "")
+          tokenArrived(slot, token)
+        },
+        "error-callback": () => {
+          slot.dataset.failed = "true"
+          showVerifyMessage(slot, VERIFY_ERROR)
+          tokenArrived(slot, "")
+        },
       })
     }
   }
@@ -348,19 +387,24 @@ const clientScript = `
     const say = (message, kind) => setMessage(status, message, kind)
 
     const invalid = fields.filter((f) => !checkField(f))
-    const slot = root.querySelector(".league-registration-turnstile")
-    const turnstileToken = slot && window.turnstile && slot.dataset.widgetId ? window.turnstile.getResponse(slot.dataset.widgetId) : ""
-    if (slot) showVerifyMessage(slot, turnstileToken ? "" : VERIFY)
-    if (invalid.length || (slot && !turnstileToken)) {
-      if (invalid.length) invalid[0].focus()
-      else slot.scrollIntoView?.({ block: "nearest", behavior: "smooth" })
+    if (invalid.length) {
+      invalid[0].focus()
       return say(FIX, "error")
     }
-
     if (!root.dataset.endpoint) return say(config.notConnected(values), "info")
 
     button.disabled = true
     say(config.sending, "info")
+    // the hidden check has usually finished by now; if not, wait a few seconds for it
+    const slot = root.querySelector(".league-registration-turnstile")
+    const turnstileToken = slot ? await getToken(slot) : ""
+    if (slot && !turnstileToken) {
+      button.disabled = false
+      // if Cloudflare wants the visitor to interact, the check has now appeared above the button
+      showVerifyMessage(slot, !window.turnstile ? VERIFY_BLOCKED : slot.dataset.failed ? VERIFY_ERROR : VERIFY)
+      slot.scrollIntoView?.({ block: "nearest", behavior: "smooth" })
+      return say(FIX, "error")
+    }
     try {
       const res = await fetch(root.dataset.endpoint, {
         method: "POST",
@@ -390,7 +434,7 @@ const clientScript = `
       say(config.failed + (err && err.message ? err.message : "unknown error"), "error")
     } finally {
       button.disabled = false
-      // tokens are single-use: get a fresh one for any further attempt
+      // tokens are single-use: start a fresh hidden check for any further attempt
       if (slot && window.turnstile && slot.dataset.widgetId) window.turnstile.reset(slot.dataset.widgetId)
     }
   })
@@ -415,8 +459,8 @@ const css = `
 .league-registration-check:empty { display: none; }
 .league-registration-check[data-kind="error"] { color: #c0392b; }
 .league-registration-check[data-kind="ok"] { color: var(--tertiary); }
-.league-registration-verify { margin: 0 0 0.85rem; }
-.league-registration-turnstile { min-height: 65px; }
+/* the check is hidden unless Cloudflare needs the visitor to interact */
+.league-registration-verify { margin: 0 0 0.5rem; }
 .league-registration-actions button {
   padding: 0.5rem 1.1rem; font: inherit; font-weight: 600; cursor: pointer;
   color: var(--light); background: var(--secondary); border: none; border-radius: 6px;

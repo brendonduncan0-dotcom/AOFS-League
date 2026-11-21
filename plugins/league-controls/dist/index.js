@@ -2,7 +2,7 @@
 //
 // Replaces ```league-controls code blocks (the bottom of each league page) with controls for
 // running the league: one button for the league's next step. Anyone can press it: it asks to
-// confirm, passes the Turnstile check, and POSTs { league, turnstileToken } to the endpoint
+// confirm, passes the (hidden) Turnstile check, and POSTs { league, turnstileToken } to the endpoint
 // (the Worker, POST /api/advance), which re-checks the same rules and starts the GitHub
 // workflow that runs the pairing script.
 //
@@ -16,7 +16,9 @@
 //
 // Options:
 //   endpoint          URL to POST to. Empty = not connected yet (the button explains that).
-//   turnstileSiteKey  Cloudflare Turnstile site key (public); shown while the button is enabled.
+//   turnstileSiteKey  Cloudflare Turnstile site key (public). The check runs hidden in the
+//                     background while the button is enabled, and only shows itself if
+//                     Cloudflare needs the visitor to interact.
 
 import fs from "node:fs"
 import path from "node:path"
@@ -147,6 +149,8 @@ const clientScript = `
   if (window.__leagueControls) return
   window.__leagueControls = true
   const VERIFY = "Please complete the verification check."
+  const VERIFY_BLOCKED = "The verification check couldn't load. Please allow challenges.cloudflare.com (e.g. in your ad blocker) or try another browser."
+  const VERIFY_ERROR = "The verification check couldn't run. Please refresh the page and try again."
 
   const setLine = (line, message, kind) => {
     if (!line) return
@@ -156,8 +160,32 @@ const clientScript = `
   }
   const verifyLine = (slot) => slot.closest(".league-controls-verify")?.querySelector(".league-controls-check")
 
-  // --- Cloudflare Turnstile (explicit rendering). The registration form may load the script
-  // too, so wait for whichever script tag exists rather than relying on its onload callback.
+  // --- Cloudflare Turnstile: hidden (appearance "interaction-only"), running in the background
+  // from page load. Explicit rendering. The registration form may load the script too, so wait
+  // for whichever script tag exists rather than relying on its onload callback.
+  const waiting = new Map() // slot -> callbacks waiting for its next token
+  const tokenArrived = (slot, token) => {
+    for (const done of waiting.get(slot) ?? []) done(token)
+    waiting.delete(slot)
+  }
+  /** The slot's token, waiting up to ms for the background check to finish. "" if none. */
+  const getToken = (slot, ms = 8000) => {
+    const id = slot.dataset.widgetId
+    const now = window.turnstile && id ? window.turnstile.getResponse(id) : ""
+    if (now) return Promise.resolve(now)
+    if (slot.dataset.failed) return Promise.resolve("") // it already reported an error
+    return new Promise((resolve) => {
+      const done = (token) => {
+        clearTimeout(timer)
+        resolve(token || "")
+      }
+      const timer = setTimeout(() => {
+        waiting.set(slot, (waiting.get(slot) ?? []).filter((d) => d !== done))
+        resolve(window.turnstile && id ? window.turnstile.getResponse(id) || "" : "")
+      }, ms)
+      waiting.set(slot, [...(waiting.get(slot) ?? []), done])
+    })
+  }
   const renderWidgets = () => {
     const slots = document.querySelectorAll(".league-controls-turnstile:not([data-widget-id])")
     if (!slots.length) return
@@ -176,8 +204,18 @@ const clientScript = `
       slot.dataset.widgetId = window.turnstile.render(slot, {
         sitekey: slot.dataset.sitekey,
         action: "advance_league",
-        callback: () => setLine(verifyLine(slot), "", null),
-        "expired-callback": () => setLine(verifyLine(slot), VERIFY, "error"),
+        appearance: "interaction-only",
+        "refresh-expired": "auto",
+        callback: (token) => {
+          delete slot.dataset.failed
+          setLine(verifyLine(slot), "", null)
+          tokenArrived(slot, token)
+        },
+        "error-callback": () => {
+          slot.dataset.failed = "true"
+          setLine(verifyLine(slot), VERIFY_ERROR, "error")
+          tokenArrived(slot, "")
+        },
       })
     }
   }
@@ -191,17 +229,21 @@ const clientScript = `
     const status = root.querySelector(".league-controls-status")
     const say = (message, kind) => setLine(status, message, kind)
 
-    const slot = root.querySelector(".league-controls-turnstile")
-    const token = slot && window.turnstile && slot.dataset.widgetId ? window.turnstile.getResponse(slot.dataset.widgetId) : ""
-    if (slot && !token) {
-      setLine(verifyLine(slot), VERIFY, "error")
-      return
-    }
     if (!root.dataset.endpoint) return say("League controls aren't connected yet.", "info")
     if (root.dataset.confirm && !window.confirm(root.dataset.confirm)) return
 
     button.disabled = true
     say("Sending…", "info")
+    // the hidden check has usually finished by now; if not, wait a few seconds for it
+    const slot = root.querySelector(".league-controls-turnstile")
+    const token = slot ? await getToken(slot) : ""
+    if (slot && !token) {
+      button.disabled = false
+      say("", null)
+      // if Cloudflare wants the visitor to interact, the check has now appeared above the button
+      setLine(verifyLine(slot), !window.turnstile ? VERIFY_BLOCKED : slot.dataset.failed ? VERIFY_ERROR : VERIFY, "error")
+      return
+    }
     let done = false
     try {
       const res = await fetch(root.dataset.endpoint, {
@@ -243,8 +285,8 @@ const css = `
 .league-controls-next:hover:not(:disabled) { opacity: 0.9; }
 .league-controls-next:disabled { opacity: 0.45; cursor: not-allowed; }
 .league-controls-note { margin: 0.5rem 0 0; font-size: 0.9rem; color: var(--darkgray); }
-.league-controls-verify { margin: 0 0 0.85rem; }
-.league-controls-turnstile { min-height: 65px; }
+/* the check is hidden unless Cloudflare needs the visitor to interact */
+.league-controls-verify { margin: 0 0 0.5rem; }
 .league-controls-check { margin: 0.35rem 0 0; font-size: 0.9rem; }
 .league-controls-check:empty, .league-controls-status:empty { display: none; }
 .league-controls-check[data-kind="error"], .league-controls-status[data-kind="error"] { color: #c0392b; }
