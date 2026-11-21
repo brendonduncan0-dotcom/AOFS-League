@@ -4,6 +4,16 @@ league: "[[League 2]]"
 status: active
 joined_round: 1
 army:
+rank: 1
+rank_label: "1 - tied"
+position: 1
+avg_vp: 0
+games: 0
+vp_total: 0
+wins: 0
+losses: 0
+byes: 0
+opp_avg_vp: 0
 tags:
   - player
 ---
