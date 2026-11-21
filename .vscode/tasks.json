@@ -1,0 +1,40 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Serve (Local)",
+      "detail": "Build the site and serve it at http://localhost:8080 with live reload",
+      "type": "shell",
+      "command": "npx quartz build --serve",
+      "group": { "kind": "build", "isDefault": true },
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated", "clear": true },
+      "problemMatcher": {
+        "owner": "quartz",
+        "pattern": { "regexp": "^__never_matches__$" },
+        "background": {
+          "activesBegin": "Quartz v",
+          "beginsPattern": "Quartz v",
+          "endsPattern": "Started a Quartz server"
+        }
+      }
+    },
+    {
+      "label": "Commit & Push",
+      "detail": "Stage all changes, commit with a message, and push to GitHub",
+      "type": "shell",
+      "command": "git add -A && git status --short && if git diff --cached --quiet; then echo 'Nothing new to commit.'; else git commit -m \"$COMMIT_MSG\"; fi && git push -u origin HEAD",
+      "options": { "env": { "COMMIT_MSG": "${input:commitMessage}" } },
+      "presentation": { "reveal": "always", "panel": "shared", "clear": true },
+      "problemMatcher": []
+    }
+  ],
+  "inputs": [
+    {
+      "id": "commitMessage",
+      "type": "promptString",
+      "description": "Commit message",
+      "default": "Update content"
+    }
+  ]
+}

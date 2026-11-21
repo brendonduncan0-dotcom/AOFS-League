@@ -1,0 +1,36 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Serve (Local)",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/quartz/bootstrap-cli.mjs",
+      "args": ["build", "--serve"],
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "skipFiles": ["<node_internals>/**"],
+      "serverReadyAction": {
+        "pattern": "listening at https?://localhost:([0-9]+)",
+        "uriFormat": "http://localhost:%s",
+        "action": "openIntegratedBrowser"
+      }
+    },
+    {
+      "name": "Commit & Push",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "git add -A && git status --short && if git diff --cached --quiet; then echo 'Nothing new to commit.'; else git commit -m \"$COMMIT_MSG\"; fi && git push -u origin HEAD",
+      "cwd": "${workspaceFolder}",
+      "env": { "COMMIT_MSG": "${input:commitMessage}" }
+    }
+  ],
+  "inputs": [
+    {
+      "id": "commitMessage",
+      "type": "promptString",
+      "description": "Commit message",
+      "default": "Update content"
+    }
+  ]
+}
