@@ -1,13 +1,28 @@
-// Cloudflare Workers config: serves the Quartz build output (public/) as a static site.
+// Cloudflare Workers config: serves the Quartz build output (public/) as a static site, and
+// runs worker/index.ts for the site's API (/api/*, e.g. player registration).
 // Build: npx quartz build   Deploy: npx wrangler deploy
+//
+// Secret (not in this file): GITHUB_TOKEN, a fine-grained GitHub token for this repo with
+// Contents + Pull requests read/write. Set it in the Cloudflare dashboard (Settings ->
+// Variables and Secrets) or with `npx wrangler secret put GITHUB_TOKEN`.
 {
   "name": "aofs-league",
   "compatibility_date": "2026-11-21",
+  "main": "worker/index.ts",
   "assets": {
     "directory": "./public",
+    "binding": "ASSETS",
+    // /api/* goes to the Worker; everything else is served straight from public/
+    "run_worker_first": ["/api/*"],
     // /leagues/league-1 serves league-1.html; folders serve their index.html
     "html_handling": "auto-trailing-slash",
     // unknown addresses get Quartz's 404 page
     "not_found_handling": "404-page"
-  }
+  },
+  "vars": {
+    "GITHUB_REPO": "brendonduncan0-dotcom/AOFS-League",
+    "GITHUB_BRANCH": "v5"
+  },
+  // request logs for the Worker (Cloudflare dashboard -> Observability)
+  "observability": { "enabled": true }
 }

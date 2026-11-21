@@ -211,14 +211,13 @@ plugins:
     options: {}
     order: 50
   - source: "@quartz-community/note-properties"
-    enabled: true
+    enabled: false
     options:
       includeAll: false
       includedProperties:
         - description
         - tags
         - aliases
-        - pairings
       excludedProperties: []
       hidePropertiesView: false
     order: 5
@@ -244,6 +243,11 @@ plugins:
       position: afterBody
       priority: 50
       display: all
+  - source: ./plugins/league-registration
+    enabled: true
+    options:
+      endpoint: /api/register
+    order: 50
 layout:
   groups:
     toolbar:

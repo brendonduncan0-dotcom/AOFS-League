@@ -2,16 +2,65 @@
 title: League 2
 description:
 status: Upcoming
-season: 2026 Christmas League
+season: 2026 Christmas
+rounds: 3
 current_round: 0
-pairings: []
+winner:
 tags:
   - league
 ---
 
-## Overview
-
 ## Current round
+
+```base
+filters:
+  and:
+    - file.inFolder(this.file.folder + "/Pairings")
+    - file.hasTag("pairing")
+    - round == this.current_round
+    - this.status != "Completed"
+properties:
+  status:
+    displayName: Status
+  vp_a:
+    displayName: VP (first)
+  vp_b:
+    displayName: VP (second)
+views:
+  - type: cards
+    name: Current round
+    order:
+      - file.name
+      - status
+      - vp_a
+      - vp_b
+```
+
+## Registered Players
+
+```base
+filters:
+  and:
+    - file.inFolder(this.file.folder + "/Registered Players")
+    - file.hasTag("player")
+    - status != "dropped"
+    - this.status == "Upcoming"
+properties:
+  army:
+    displayName: Army
+views:
+  - type: table
+    name: Registered Players
+    order:
+      - file.name
+      - army
+    sort:
+      - property: file.name
+        direction: ASC
+```
+
+```league-registration
+```
 
 ## Leaderboard
 
@@ -20,6 +69,7 @@ filters:
   and:
     - file.inFolder(this.file.folder + "/Registered Players")
     - file.hasTag("player")
+    - this.status != "Upcoming"
 properties:
   rank_label:
     displayName: "#"
@@ -57,4 +107,34 @@ views:
 ```
 
 ## Results
- 
+
+```base
+filters:
+  and:
+    - file.inFolder(this.file.folder + "/Pairings")
+    - file.hasTag("pairing")
+    - this.status != "Upcoming"
+properties:
+  player_a:
+    displayName: Player
+  vp_a:
+    displayName: VP
+  vp_b:
+    displayName: VP
+  player_b:
+    displayName: Opponent
+  status:
+    displayName: Status
+views:
+  - type: table
+    name: Results
+    groupBy:
+      property: round
+      direction: ASC
+    order:
+      - player_a
+      - vp_a
+      - vp_b
+      - player_b
+      - status
+```

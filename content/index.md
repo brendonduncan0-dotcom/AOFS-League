@@ -8,13 +8,20 @@ title: AOFS League
 filters:
   and:
     - file.hasTag("league")
+    - file.inFolder("Leagues")
     - status == "Active"
+formulas:
+  round_progress: '"Round " + current_round + " of " + rounds'
+properties:
+  formula.round_progress:
+    displayName: Current round
 views:
   - type: cards
     name: Active
     order:
       - file.name
       - season
+      - formula.round_progress
 ```
 
 ## Upcoming leagues
@@ -23,6 +30,7 @@ views:
 filters:
   and:
     - file.hasTag("league")
+    - file.inFolder("Leagues")
     - status == "Upcoming"
 views:
   - type: cards
@@ -38,6 +46,7 @@ views:
 filters:
   and:
     - file.hasTag("league")
+    - file.inFolder("Leagues")
     - status == "Completed"
 views:
   - type: cards

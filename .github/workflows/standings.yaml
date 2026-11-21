@@ -9,12 +9,14 @@ name: Standings
 on:
   pull_request:
     paths:
+      - "worker/**"
       - "content/Leagues/**"
       - "scripts/**"
       - ".github/workflows/standings.yaml"
   push:
     branches: [v5]
     paths:
+      - "worker/**"
       - "content/Leagues/**"
       - "scripts/**"
       - ".github/workflows/standings.yaml"
@@ -39,6 +41,8 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci --no-audit --no-fund
+      - name: Test league scripts and Worker
+        run: npx tsx --test scripts/league.test.ts worker/index.test.ts
       - name: Validate results and preview standings
         run: npm run standings -- --dry
 
