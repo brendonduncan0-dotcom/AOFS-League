@@ -1,7 +1,7 @@
 // League Registration: a Quartz transformer plugin.
 //
-// Replaces ```league-registration code blocks with a registration form, but only on pages
-// whose frontmatter `status` is "Upcoming". On any other page the block is removed.
+// Replaces ```league-registration code blocks with a registration form, but only while the
+// league's registration is open (see registrationRound). Otherwise the block is removed.
 //
 // Hand-written ESM (no build step): this file is the plugin's shipped output.
 //
@@ -14,11 +14,28 @@
 
 const LANG = "league-registration"
 
+/**
+ * The round a new player would join from, or undefined if registration is closed.
+ * Same rule as the Worker (worker/index.ts): `registration_open: true`, and the league is
+ * Upcoming (join from round 1) or Active with rounds still to pair (join from the next round).
+ */
+function registrationRound(fm) {
+  const open = fm.registration_open === true || String(fm.registration_open).toLowerCase() === "true"
+  if (!open) return undefined
+  const status = String(fm.status ?? "").toLowerCase()
+  if (status === "upcoming") return 1
+  if (status !== "active") return undefined
+  const current = Number(fm.current_round)
+  const rounds = Number(fm.rounds)
+  if (!Number.isInteger(current) || !Number.isInteger(rounds) || current >= rounds) return undefined
+  return current + 1
+}
+
 /** Walk an mdast tree, replacing/removing `code` nodes in the registration language. */
 function remarkLeagueRegistration(endpoint, siteKey) {
   return () => (tree, file) => {
     const fm = file.data?.frontmatter ?? {}
-    const upcoming = String(fm.status ?? "").toLowerCase() === "upcoming"
+    const joinRound = registrationRound(fm)
     const league = String(fm.title ?? "")
     // the league's folder in content/, e.g. "Leagues/League 2" (the Worker uses this, not the title)
     const folder = String(file.data?.relativePath ?? "").split("/").slice(0, -1).join("/")
@@ -28,7 +45,7 @@ function remarkLeagueRegistration(endpoint, siteKey) {
       for (let i = parent.children.length - 1; i >= 0; i--) {
         const node = parent.children[i]
         if (node.type === "code" && node.lang === LANG) {
-          if (upcoming) parent.children[i] = formNode(league, folder, endpoint, siteKey)
+          if (joinRound) parent.children[i] = formNode(league, folder, endpoint, siteKey, joinRound)
           else parent.children.splice(i, 1)
         } else {
           visit(node)
@@ -43,7 +60,7 @@ const el = (tagName, properties = {}, children = []) => ({ type: "element", tagN
 const text = (value) => ({ type: "text", value })
 
 /** An mdast node that mdast-util-to-hast turns into the form markup (via data.hName/hChildren). */
-function formNode(league, folder, endpoint, siteKey) {
+function formNode(league, folder, endpoint, siteKey, joinRound = 1) {
   const idBase = `league-registration-${league.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`
   const inputId = `${idBase}-name`
   const armyId = `${idBase}-army`
@@ -61,6 +78,13 @@ function formNode(league, folder, endpoint, siteKey) {
         dataEndpoint: endpoint || undefined,
       },
       hChildren: [
+        ...(joinRound > 1
+          ? [
+              el("p", { className: ["league-registration-intro"] }, [
+                text(`This league has started, but you can still join. You'll be paired from round ${joinRound}.`),
+              ]),
+            ]
+          : []),
         el("form", { className: ["league-registration-form"], noValidate: true }, [
           el("div", { className: ["league-registration-field"] }, [
             el("label", { htmlFor: inputId }, [text("Your name")]),
@@ -199,7 +223,8 @@ const clientScript = `
   renderWidgets()
 
   const registeredNames = () =>
-    [...document.querySelectorAll("h2#registered-players + .bases-page tbody a")]
+    // the Registered Players table (Upcoming) or the Leaderboard (Active)
+    [...document.querySelectorAll("h2#registered-players + .bases-page tbody a, h2#leaderboard + .bases-page tbody a")]
       .map((a) => a.textContent.trim().toLowerCase())
 
   // --- Field checks: each field shows its own message directly under its input ---
@@ -338,6 +363,7 @@ const css = `
   border: 1px solid var(--lightgray); border-radius: 6px;
 }
 .league-registration-field input:focus { outline: 2px solid var(--secondary); outline-offset: 1px; }
+.league-registration-intro { margin: 0 0 0.85rem; }
 .league-registration-help { margin: 0.35rem 0 0; font-size: 0.85rem; color: var(--darkgray); }
 .league-registration-check { margin: 0.35rem 0 0; font-size: 0.9rem; }
 .league-registration-check:empty { display: none; }

@@ -374,6 +374,11 @@ export function printStandings(title: string, table: Stats[]) {
 /** Defaults every player note should have; added only when missing (never overwritten). */
 const PLAYER_DEFAULTS: Record<string, string | number> = { status: "active", joined_round: 1 }
 
+/** League-level totals written to the league note (e.g. player_count, shown on the homepage cards). */
+export function writeLeagueSummary(league: League) {
+  writeFrontmatter(league.noteFile, { player_count: league.players.size })
+}
+
 export function writeStandings(table: Stats[]) {
   for (const s of table) {
     const fm = matter(fs.readFileSync(s.file, "utf8")).data

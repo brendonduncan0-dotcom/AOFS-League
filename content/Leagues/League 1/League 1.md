@@ -5,7 +5,9 @@ status: Completed
 season: 2026 Monthly (June - October)
 rounds: 5
 current_round: 5
+registration_open: false
 winner: "[[Austin]]"
+player_count: 8
 tags:
   - league
 ---
@@ -36,6 +38,11 @@ views:
       - vp_b
 ```
 
+## Registration
+
+```league-registration
+```
+
 ## Registered Players
 
 ```base
@@ -59,9 +66,6 @@ views:
     sort:
       - property: file.name
         direction: ASC
-```
-
-```league-registration
 ```
 
 ## Leaderboard

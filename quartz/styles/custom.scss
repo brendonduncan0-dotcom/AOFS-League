@@ -9,27 +9,30 @@
 // empty table cells also use `.bases-empty`, so the `>` matters); hide the whole section then
 // (heading, block, and its table-of-contents link).
 @each $section in current-round, registered-players, leaderboard, results, active-leagues, upcoming-leagues, completed-leagues {
-  // Registered Players keeps its heading while the registration renderer is shown
-  // (an upcoming league with no players yet still needs the place to register)
-  $keep: "";
-  @if $section == registered-players {
-    $keep: ":not(:has(~ .league-registration))";
-  }
-
-  h2##{$section}:has(+ .bases-page .bases-view > .bases-empty)#{$keep},
+  h2##{$section}:has(+ .bases-page .bases-view > .bases-empty),
   h2##{$section} + .bases-page:has(.bases-view > .bases-empty) {
     display: none;
   }
 
-  :root:has(h2##{$section}:has(+ .bases-page .bases-view > .bases-empty)#{$keep}) a[href="##{$section}"] {
+  :root:has(h2##{$section}:has(+ .bases-page .bases-view > .bases-empty)) a[href="##{$section}"] {
     display: none;
   }
+}
+
+// Registration section: the renderer removes the form when the league's registration is
+// closed, so hide the heading (and its table-of-contents link) when no form follows it.
+h2#registration:not(:has(+ .league-registration)) {
+  display: none;
+}
+
+:root:has(h2#registration:not(:has(+ .league-registration))) a[href="#registration"] {
+  display: none;
 }
 
 // Registration renderer: until the custom renderer replaces it, the ```league-registration
 // block would show as an empty code box on every league page, so hide the raw block.
 // The renderer should output an element with class `league-registration`, and only for
-// leagues whose status is Upcoming.
+// leagues whose registration is open (registration_open: true, and Upcoming or Active).
 figure:has(> pre[data-language="league-registration"]) {
   display: none;
 }

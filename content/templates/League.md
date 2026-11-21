@@ -5,6 +5,8 @@ status: Upcoming
 season:
 rounds:
 current_round: 0
+registration_open: true
+player_count: 0
 winner:
 tags:
   - league
@@ -36,6 +38,11 @@ views:
       - vp_b
 ```
 
+## Registration
+
+```league-registration
+```
+
 ## Registered Players
 
 ```base
@@ -59,9 +66,6 @@ views:
     sort:
       - property: file.name
         direction: ASC
-```
-
-```league-registration
 ```
 
 ## Leaderboard

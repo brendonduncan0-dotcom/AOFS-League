@@ -5,7 +5,9 @@ status: Upcoming
 season: 2026 Christmas
 rounds: 3
 current_round: 0
+registration_open: true
 winner:
+player_count: 2
 tags:
   - league
 ---
@@ -36,6 +38,11 @@ views:
       - vp_b
 ```
 
+## Registration
+
+```league-registration
+```
+
 ## Registered Players
 
 ```base
@@ -59,9 +66,6 @@ views:
     sort:
       - property: file.name
         direction: ASC
-```
-
-```league-registration
 ```
 
 ## Leaderboard

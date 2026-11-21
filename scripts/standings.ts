@@ -4,6 +4,7 @@
  *
  * For each league:
  *   - player notes get their totals, rank and position
+ *   - the league note gets player_count (number of registered players, including dropped)
  *   - pairing notes get status (scheduled | played | unplayed), VP and a link to their result
  *
  * Usage: npm run standings            (all leagues)
@@ -15,6 +16,7 @@ import {
   printStandings,
   readLeague,
   syncPairings,
+  writeLeagueSummary,
   writePairings,
   writeStandings,
 } from "./lib/league.ts"
@@ -33,6 +35,7 @@ for (const dir of leagueDirs()) {
     )
   }
   if (!DRY_RUN) {
+    writeLeagueSummary(league)
     writeStandings(table)
     writePairings(pairings)
   }

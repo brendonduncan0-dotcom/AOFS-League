@@ -119,8 +119,8 @@ export async function register(
     const leagueName = league.split("/").pop()!
     const leagueNote = await gh.file(`content/${league}/${leagueName}.md`)
     if (leagueNote === null) throw new UserError("Unknown league.")
-    const status = frontmatterValue(leagueNote, "status")
-    if (status?.toLowerCase() !== "upcoming") throw new UserError("Registration for this league is closed.")
+    const joinedRound = registrationRound(leagueNote)
+    if (joinedRound === undefined) throw new UserError("Registration for this league is closed.")
 
     const playersDir = `content/${league}/Registered Players`
     const existing = await gh.list(playersDir)
@@ -134,7 +134,7 @@ export async function register(
 
     const template = await gh.file("content/templates/Player.md")
     if (template === null) throw new Error("content/templates/Player.md is missing")
-    const note = playerNote(template, name, leagueName, armyLink)
+    const note = playerNote(template, name, leagueName, armyLink, joinedRound)
     const path = `${playersDir}/${name}.md`
     await gh.putFile(path, note, branch, `Register ${name} for ${leagueName}`)
     const pr = await gh.openPullRequest(
@@ -155,7 +155,13 @@ export async function register(
 }
 
 /** Fill the Player template's frontmatter for a new registration. */
-export function playerNote(template: string, name: string, leagueName: string, armyLink = ""): string {
+export function playerNote(
+  template: string,
+  name: string,
+  leagueName: string,
+  armyLink = "",
+  joinedRound = 1,
+): string {
   // replace `key:` in the frontmatter, or add it before `tags:` if the template lacks it
   // (function replacements, so `$` in values like URLs is never treated as a pattern)
   const set = (src: string, key: string, value: string) => {
@@ -168,9 +174,26 @@ export function playerNote(template: string, name: string, leagueName: string, a
   out = set(out, "title", JSON.stringify(name))
   out = set(out, "league", JSON.stringify(`[[${leagueName}]]`))
   out = set(out, "status", "active")
-  out = set(out, "joined_round", "1")
+  out = set(out, "joined_round", String(joinedRound))
   if (armyLink) out = set(out, "army", JSON.stringify(armyLink))
   return out
+}
+
+/**
+ * The round a new player joins from, or undefined if registration is closed.
+ * Same rule as the registration form (plugins/league-registration): `registration_open: true`,
+ * and the league is Upcoming (round 1) or Active with rounds still to pair (the next round;
+ * the current round is already paired).
+ */
+export function registrationRound(leagueNote: string): number | undefined {
+  if (frontmatterValue(leagueNote, "registration_open")?.toLowerCase() !== "true") return undefined
+  const status = frontmatterValue(leagueNote, "status")?.toLowerCase()
+  if (status === "upcoming") return 1
+  if (status !== "active") return undefined
+  const current = Number(frontmatterValue(leagueNote, "current_round"))
+  const rounds = Number(frontmatterValue(leagueNote, "rounds"))
+  if (!Number.isInteger(current) || !Number.isInteger(rounds) || current >= rounds) return undefined
+  return current + 1
 }
 
 /** Read a simple top-level `key: value` from a note's frontmatter (quotes removed). */

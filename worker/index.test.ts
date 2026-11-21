@@ -12,7 +12,7 @@ const env: Env = {
 }
 
 const template = readFileSync("content/templates/Player.md", "utf8")
-const upcomingLeague = "---\ntitle: League 2\nstatus: Upcoming\nrounds: 3\ncurrent_round: 0\n---\n"
+const upcomingLeague = "---\ntitle: League 2\nstatus: Upcoming\nrounds: 3\ncurrent_round: 0\nregistration_open: true\n---\n"
 
 /** In-memory GitHub: files on the deploy branch, branches, and what the Worker wrote. */
 function fakeGitHub(files: Record<string, string>, branches: string[] = []) {
@@ -96,11 +96,29 @@ test("rejects a second registration while the first is waiting for approval", as
   assert.equal(r.written.length, 0)
 })
 
-test("rejects leagues that are not upcoming", async () => {
-  const files = { ...baseFiles(), "content/Leagues/League 2/League 2.md": upcomingLeague.replace("Upcoming", '"Active"') }
-  const r = await call({ league: "Leagues/League 2", name: "Alex" }, files)
-  assert.equal(r.status, 400)
-  assert.match(r.body.error, /closed/)
+const withLeague = (note: string) => ({ ...baseFiles(), "content/Leagues/League 2/League 2.md": note })
+
+test("rejects leagues whose registration is closed", async () => {
+  const closed = [
+    upcomingLeague.replace("registration_open: true", "registration_open: false"),
+    upcomingLeague.replace("registration_open: true\n", ""),
+    upcomingLeague.replace("Upcoming", "Completed"),
+    // Active, but the final round is already paired
+    upcomingLeague.replace("Upcoming", '"Active"').replace("current_round: 0", "current_round: 3"),
+  ]
+  for (const note of closed) {
+    const r = await call({ league: "Leagues/League 2", name: "Alex" }, withLeague(note))
+    assert.equal(r.status, 400, note)
+    assert.match(r.body.error, /closed/)
+    assert.equal(r.written.length, 0)
+  }
+})
+
+test("late registration for an active league joins from the next round", async () => {
+  const active = upcomingLeague.replace("Upcoming", '"Active"').replace("current_round: 0", "current_round: 1")
+  const r = await call({ league: "Leagues/League 2", name: "Alex" }, withLeague(active))
+  assert.equal(r.status, 200)
+  assert.equal(frontmatterValue(r.written[0].content, "joined_round"), "2")
 })
 
 test("rejects unknown leagues and path tricks", async () => {
