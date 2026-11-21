@@ -1,13 +1,14 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
-import worker, { frontmatterValue, github, playerNote, register, type Env, type GitHub } from "./index.ts"
+import worker, { frontmatterValue, github, playerNote, register, turnstile, type Env, type GitHub } from "./index.ts"
 
 const env: Env = {
   ASSETS: { fetch: async () => new Response("asset") },
   GITHUB_REPO: "owner/repo",
   GITHUB_BRANCH: "v5",
   GITHUB_TOKEN: "test-token",
+  TURNSTILE_SECRET: "test-secret",
 }
 
 const template = readFileSync("content/templates/Player.md", "utf8")
@@ -51,9 +52,13 @@ const baseFiles = () => ({
 const post = (body: unknown) =>
   new Request("https://site.example/api/register", { method: "POST", body: JSON.stringify(body) })
 
-async function call(body: unknown, files = baseFiles(), branches: string[] = []) {
+/** Turnstile stand-in: only the token "ok" passes. */
+const verifyOk = async (token: string) => token === "ok"
+
+async function call(body: any, files = baseFiles(), branches: string[] = []) {
   const fake = fakeGitHub(files, branches)
-  const res = await register(post(body), env, fake.gh)
+  const withToken = body && typeof body === "object" && !("turnstileToken" in body) ? { ...body, turnstileToken: "ok" } : body
+  const res = await register(post(withToken), env, fake.gh, verifyOk)
   return { status: res.status, body: (await res.json()) as Record<string, string>, ...fake }
 }
 
@@ -114,8 +119,46 @@ test("rejects a malformed request body", async () => {
     new Request("https://site.example/api/register", { method: "POST", body: "not json" }),
     env,
     fakeGitHub(baseFiles()).gh,
+    verifyOk,
   )
-  assert.equal(res.status, 400)
+  assert.equal(res.status, 403) // no Turnstile token in a body that isn't JSON
+})
+
+test("requires a valid Turnstile token before contacting GitHub", async () => {
+  const missing = await call({ league: "Leagues/League 2", name: "Alex", turnstileToken: "" })
+  assert.equal(missing.status, 403)
+  assert.match(missing.body.error, /verification/i)
+  const bad = await call({ league: "Leagues/League 2", name: "Alex", turnstileToken: "forged" })
+  assert.equal(bad.status, 403)
+  assert.match(bad.body.error, /failed/)
+  assert.equal(bad.branches.length + bad.written.length, 0)
+})
+
+test("fails closed when the Turnstile secret is not configured", async () => {
+  const fake = fakeGitHub(baseFiles())
+  const res = await register(
+    post({ league: "Leagues/League 2", name: "Alex", turnstileToken: "ok" }),
+    { ...env, TURNSTILE_SECRET: "" },
+    fake.gh,
+    verifyOk,
+  )
+  assert.equal(res.status, 500)
+  assert.equal(fake.written.length, 0)
+})
+
+test("Turnstile verifier posts secret, token and IP to Cloudflare", async () => {
+  let sent: FormData | undefined
+  let url = ""
+  const verify = turnstile(env, (async (u: string, init: RequestInit) => {
+    url = u
+    sent = init.body as FormData
+    return new Response(JSON.stringify({ success: sent.get("response") === "good" }))
+  }) as typeof fetch)
+  assert.equal(await verify("good", "1.2.3.4"), true)
+  assert.equal(url, "https://challenges.cloudflare.com/turnstile/v0/siteverify")
+  assert.equal(sent!.get("secret"), "test-secret")
+  assert.equal(sent!.get("remoteip"), "1.2.3.4")
+  assert.equal(await verify("bad"), false)
 })
 
 test("routes: /api/register needs POST, other /api paths 404, everything else is the site", async () => {

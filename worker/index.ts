@@ -2,13 +2,14 @@
  * AOFS League Worker.
  *
  * Serves the static site (Quartz build in public/) and handles the site's API:
- *   POST /api/register   { league: "Leagues/League 2", name: "Alex" }
+ *   POST /api/register   { league: "Leagues/League 2", name: "Alex", turnstileToken: "…" }
  *     -> opens a GitHub pull request adding Leagues/League 2/Registered Players/Alex.md
  *
  * Configuration (wrangler.jsonc):
  *   vars.GITHUB_REPO     "owner/repo"
  *   vars.GITHUB_BRANCH   branch the site deploys from (pull requests target it)
  *   secret GITHUB_TOKEN  fine-grained token for this repo: Contents + Pull requests read/write
+ *   secret TURNSTILE_SECRET  Turnstile widget secret key; every request must carry a valid token
  */
 
 export interface Env {
@@ -16,6 +17,7 @@ export interface Env {
   GITHUB_REPO: string
   GITHUB_BRANCH: string
   GITHUB_TOKEN: string
+  TURNSTILE_SECRET: string
 }
 
 /** Same rule as the form: letters/numbers first, then letters, numbers, space ' - . (max 40). */
@@ -44,10 +46,25 @@ class UserError extends Error {
   }
 }
 
-export async function register(request: Request, env: Env, gh = github(env)): Promise<Response> {
+export async function register(
+  request: Request,
+  env: Env,
+  gh = github(env),
+  verify: Verifier = turnstile(env),
+): Promise<Response> {
   try {
     if (!env.GITHUB_TOKEN) throw new Error("GITHUB_TOKEN secret is not set")
-    const body = (await request.json().catch(() => null)) as { league?: unknown; name?: unknown } | null
+    if (!env.TURNSTILE_SECRET) throw new Error("TURNSTILE_SECRET secret is not set")
+    const body = (await request.json().catch(() => null)) as
+      | { league?: unknown; name?: unknown; turnstileToken?: unknown }
+      | null
+
+    // Human check first, before touching GitHub
+    const token = typeof body?.turnstileToken === "string" ? body.turnstileToken : ""
+    if (!token) throw new UserError("Please complete the verification check.", 403)
+    const ip = request.headers.get("CF-Connecting-IP") ?? undefined
+    if (!(await verify(token, ip))) throw new UserError("Verification failed, please try again.", 403)
+
     const league = typeof body?.league === "string" ? body.league.trim() : ""
     const name = typeof body?.name === "string" ? body.name.trim().replace(/\s+/g, " ") : ""
 
@@ -124,6 +141,28 @@ const slug = (s: string) =>
 
 const json = (data: unknown, status = 200) =>
   new Response(JSON.stringify(data), { status, headers: { "Content-Type": "application/json" } })
+
+// --- Cloudflare Turnstile --------------------------------------------------------------------
+
+export type Verifier = (token: string, ip?: string) => Promise<boolean>
+
+/** Checks a Turnstile token with Cloudflare (single use; expires after 5 minutes). */
+export function turnstile(env: Env, fetchImpl: typeof fetch = fetch): Verifier {
+  return async (token, ip) => {
+    const form = new FormData()
+    form.append("secret", env.TURNSTILE_SECRET)
+    form.append("response", token)
+    if (ip) form.append("remoteip", ip)
+    const res = await fetchImpl("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST",
+      body: form,
+    })
+    if (!res.ok) throw new Error(`Turnstile siteverify failed: ${res.status}`)
+    const data = (await res.json()) as { success?: boolean; "error-codes"?: string[] }
+    if (!data.success) console.warn("Turnstile rejected token:", data["error-codes"])
+    return data.success === true
+  }
+}
 
 // --- GitHub REST API -------------------------------------------------------------------------
 

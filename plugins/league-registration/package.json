@@ -21,7 +21,8 @@
     "defaultOrder": 50,
     "defaultEnabled": true,
     "defaultOptions": {
-      "endpoint": ""
+      "endpoint": "",
+      "turnstileSiteKey": ""
     },
     "configSchema": {
       "type": "object",
@@ -29,6 +30,10 @@
         "endpoint": {
           "type": "string",
           "description": "URL the form POSTs registrations to (the Cloudflare Worker). Leave empty until it exists."
+        },
+        "turnstileSiteKey": {
+          "type": "string",
+          "description": "Cloudflare Turnstile site key (public). When set, the form shows the Turnstile check."
         }
       },
       "additionalProperties": false

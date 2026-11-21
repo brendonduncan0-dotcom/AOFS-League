@@ -247,6 +247,8 @@ plugins:
     enabled: true
     options:
       endpoint: /api/register
+      # Cloudflare Turnstile site key (public, safe to commit)
+      turnstileSiteKey: "0x4AAAAAAGLJENNAXP6DjRuB"
     order: 50
 layout:
   groups:
