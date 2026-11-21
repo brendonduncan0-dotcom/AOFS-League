@@ -1,0 +1,72 @@
+name: Standings
+
+# Keeps league standings in the repo in sync with the match notes.
+# - Pull requests: check results are valid (no files are changed).
+# - Pushes to v5: recalculate standings and commit the updated player notes.
+# Cloudflare also runs `npm run standings` in its build, so the live site is always
+# current; this workflow keeps the repo (and your Obsidian vault, after a pull) in step.
+
+on:
+  pull_request:
+    paths:
+      - "content/Leagues/**"
+      - "scripts/**"
+      - ".github/workflows/standings.yaml"
+  push:
+    branches: [v5]
+    paths:
+      - "content/Leagues/**"
+      - "scripts/**"
+      - ".github/workflows/standings.yaml"
+  workflow_dispatch:
+
+# Never run two standings updates on v5 at once; a newer push supersedes an older one.
+concurrency:
+  group: standings-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check results
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Validate results and preview standings
+        run: npm run standings -- --dry
+
+  update:
+    name: Update standings
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      - name: Recalculate standings
+        run: npm run standings
+      - name: Commit updated standings
+        run: |
+          if git diff --quiet -- content/Leagues; then
+            echo "Standings already up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add content/Leagues
+          # [skip ci]: Cloudflare already built the site with these standings, so skip a rebuild.
+          git commit -m "Update standings [skip ci]"
+          git pull --rebase origin "${GITHUB_REF_NAME}"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
