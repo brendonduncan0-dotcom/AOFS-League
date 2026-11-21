@@ -262,6 +262,8 @@ const clientScript = `
       }
       done = true
       say(data.message, "success")
+      // the site will change: the sidebar status tag (plugins/site-status) shows "updating"
+      document.dispatchEvent(new CustomEvent("site-status:refresh"))
       // the round is on its way: hide the check and leave the button disabled
       root.querySelector(".league-controls-verify")?.remove()
     } catch (err) {

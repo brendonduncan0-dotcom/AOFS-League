@@ -430,6 +430,8 @@ const clientScript = `
       say("", null)
       status.dataset.kind = "success"
       config.done(values, data, status)
+      // the site will change: the sidebar status tag (plugins/site-status) shows "updating"
+      document.dispatchEvent(new CustomEvent("site-status:refresh"))
     } catch (err) {
       say(config.failed + (err && err.message ? err.message : "unknown error"), "error")
     } finally {

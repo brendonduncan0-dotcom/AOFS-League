@@ -6,6 +6,11 @@
 // Hidden until the first answer, and whenever the status is unavailable (e.g. `quartz serve`
 // locally, where there's no Worker).
 //
+// The site's forms and league controls dispatch a "site-status:refresh" event on `document`
+// after a request that will change the site. The tag then says "updating" straight away and
+// keeps saying so until GitHub reports a newer change that has finished (or 5 minutes pass):
+// e.g. a registration waits for its pull request to auto-merge before it reaches the branch.
+//
 // Hand-written ESM (no build step): this file is the plugin's shipped output.
 
 import { jsx } from "preact/jsx-runtime"
@@ -44,15 +49,31 @@ const script = `
   const TIP = { "updating": "Working on: ", "up-to-date": "Latest change: ", "failed": "Failed: " }
   let last = null
   let timer
+  // set by "site-status:refresh": waiting for a change that's on its way
+  let expecting = null // { since, commit }
+  const EXPECT_MS = 5 * 60 * 1000
+
+  /** What to show: the Worker's answer, or "updating" while an expected change hasn't arrived. */
+  const shown = () => {
+    if (!expecting) return last
+    const arrived = last && last.state !== "updating" && last.commit && last.commit !== expecting.commit
+    if (arrived || Date.now() - expecting.since > EXPECT_MS) {
+      expecting = null
+      return last
+    }
+    if (last && last.state === "updating") return last
+    return { state: "updating", message: "your change" }
+  }
 
   const apply = () => {
+    const now = shown()
     for (const el of document.querySelectorAll(".site-status")) {
-      const state = last && TEXT[last.state] ? last.state : null
+      const state = now && TEXT[now.state] ? now.state : null
       el.hidden = !state
       if (!state) continue
       el.dataset.state = state
       el.querySelector(".site-status-text").textContent = TEXT[state]
-      el.title = last.message ? TIP[state] + last.message : ""
+      el.title = now.message ? TIP[state] + now.message : ""
     }
   }
 
@@ -69,8 +90,17 @@ const script = `
       apply()
     }
     // check more often while something is going through
-    timer = setTimeout(poll, last && last.state === "updating" ? 10000 : 30000)
+    const busy = expecting || (last && last.state === "updating")
+    timer = setTimeout(poll, busy ? 10000 : 30000)
   }
+
+  document.addEventListener("site-status:refresh", () => {
+    expecting = { since: Date.now(), commit: last && last.commit }
+    apply()
+    // the Worker's answer is shared for ~20s, so give the change a moment before asking
+    clearTimeout(timer)
+    timer = setTimeout(poll, 5000)
+  })
 
   document.addEventListener("nav", apply)
   // coming back to the tab: check straight away
