@@ -5,6 +5,7 @@ import worker, {
   ARMY_LINK_ERRORS,
   SEASON_ERROR,
   seasonTaken,
+  siteStatus,
   checkArmyLink,
   advanceLeague,
   createLeague,
@@ -64,6 +65,12 @@ function fakeGitHub(
     },
     async putFile(path, content, branch) {
       written.push({ path, content, branch })
+    },
+    async recentCommits() {
+      return []
+    },
+    async checks() {
+      return []
     },
     async deleteBranch(b) {
       const i = branches.indexOf(b)
@@ -551,4 +558,73 @@ test("advance: if GitHub won't start the run, the lock is removed so it can be p
   const retry = await advance({ league: "Leagues/League 2" }, files, branches)
   assert.equal(retry.status, 200)
   assert.equal(retry.dispatches.length, 1)
+})
+
+// --- Site status -----------------------------------------------------------------------------
+
+type Check = { name: string; status: string; conclusion: string | null; url?: string }
+function statusGitHub(commits: { sha: string; message: string; date: string; checks: Check[] }[]): GitHub {
+  return {
+    ...fakeGitHub({}).gh,
+    async recentCommits(n) {
+      return commits.slice(0, n)
+    },
+    async checks(sha) {
+      return commits.find((c) => c.sha === sha)?.checks ?? []
+    },
+  }
+}
+const NOW = Date.parse("2026-11-21T10:00:00Z")
+const ago = (minutes: number) => new Date(NOW - minutes * 60_000).toISOString()
+const done = (name: string, conclusion = "success"): Check => ({ name, status: "completed", conclusion })
+const running = (name: string): Check => ({ name, status: "in_progress", conclusion: null, url: "https://run" })
+
+test("site status: up to date when every check has finished", async () => {
+  const gh = statusGitHub([
+    { sha: "b", message: "Register Alex for League 2 (#11)", date: ago(10), checks: [done("Workers Builds"), done("Update standings")] },
+    { sha: "a", message: "older", date: ago(30), checks: [done("Workers Builds")] },
+  ])
+  assert.deepEqual(await siteStatus(gh, NOW), { state: "up-to-date", message: "Register Alex for League 2 (#11)", commit: "b" })
+})
+
+test("site status: updating while a check is queued or running", async () => {
+  const gh = statusGitHub([
+    { sha: "b", message: "Draw round 2 for League 2\n\nbody", date: ago(1), checks: [done("Draw next round"), running("Workers Builds")] },
+  ])
+  const s = await siteStatus(gh, NOW)
+  assert.equal(s.state, "updating")
+  assert.equal(s.message, "Draw round 2 for League 2")
+})
+
+test("site status: a [skip ci] commit on top of a commit still building is updating", async () => {
+  const gh = statusGitHub([
+    { sha: "c", message: "Update standings [skip ci]", date: ago(0), checks: [] },
+    { sha: "b", message: "Register Alex for League 2 (#11)", date: ago(1), checks: [running("Workers Builds")] },
+  ])
+  assert.equal((await siteStatus(gh, NOW)).state, "updating")
+})
+
+test("site status: a just-pushed commit with no checks yet is updating; an old one isn't", async () => {
+  const fresh = statusGitHub([{ sha: "c", message: "Edit", date: ago(0.5), checks: [] }, { sha: "b", message: "x", date: ago(20), checks: [done("Workers Builds")] }])
+  assert.equal((await siteStatus(fresh, NOW)).state, "updating")
+  const stale = statusGitHub([{ sha: "c", message: "Edit", date: ago(10), checks: [] }, { sha: "b", message: "x", date: ago(20), checks: [done("Workers Builds")] }])
+  assert.equal((await siteStatus(stale, NOW)).state, "up-to-date")
+})
+
+test("site status: failed when the latest checked commit failed; cancelled doesn't count", async () => {
+  const failed = statusGitHub([{ sha: "b", message: "Edit", date: ago(5), checks: [done("Workers Builds", "failure")] }])
+  assert.equal((await siteStatus(failed, NOW)).state, "failed")
+  const cancelled = statusGitHub([{ sha: "b", message: "Edit", date: ago(5), checks: [done("Update standings", "cancelled"), done("Workers Builds")] }])
+  assert.equal((await siteStatus(cancelled, NOW)).state, "up-to-date")
+  const fixed = statusGitHub([
+    { sha: "c", message: "Fix", date: ago(2), checks: [done("Workers Builds")] },
+    { sha: "b", message: "Edit", date: ago(5), checks: [done("Workers Builds", "failure")] },
+  ])
+  assert.equal((await siteStatus(fixed, NOW)).state, "up-to-date")
+})
+
+test("GET /api/status answers unknown (not an error) when GitHub can't be reached", async () => {
+  const res = await worker.fetch(new Request("https://site.example/api/status"), { ...env, GITHUB_TOKEN: "" })
+  assert.equal(res.status, 200)
+  assert.equal(((await res.json()) as { state: string }).state, "unknown")
 })

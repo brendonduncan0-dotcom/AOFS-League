@@ -136,6 +136,12 @@ plugins:
       group: toolbar
       groupOptions:
         grow: true
+  # "Site is updating" / "Site is up-to-date" tag, between the search toolbar (35) and the explorer (50)
+  - source: ./plugins/site-status
+    enabled: true
+    layout:
+      position: left
+      priority: 40
   - source: "@quartz-community/backlinks"
     enabled: true
     layout:

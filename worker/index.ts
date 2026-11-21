@@ -7,6 +7,9 @@
  *     -> opens a GitHub pull request adding Leagues/League 2/Registered Players/Alex.md
  *   POST /api/leagues    { season: "2027 Summer", turnstileToken: "…" }
  *     -> opens a GitHub pull request adding Leagues/League N/League N.md (the next free number)
+ *   GET  /api/status     -> { state: "updating" | "up-to-date" | "failed" | "unknown", … }
+ *     whether the latest change on the deploy branch is still going through GitHub Actions
+ *     and the Cloudflare build (shown in the site's sidebar by plugins/site-status)
  *   POST /api/advance    { league: "Leagues/League 2", turnstileToken: "…" }
  *     -> starts .github/workflows/advance.yaml, which draws the league's next round (or
  *        finishes it) and pushes to the deploy branch
@@ -88,6 +91,10 @@ export default {
     if (url.pathname === "/api/leagues") {
       if (request.method !== "POST") return json({ error: "Use POST" }, 405)
       return createLeague(request, env)
+    }
+    if (url.pathname === "/api/status") {
+      if (request.method !== "GET") return json({ error: "Use GET" }, 405)
+      return cachedSiteStatus(request, env)
     }
     if (url.pathname.startsWith("/api/")) return json({ error: "Not found" }, 404)
     return env.ASSETS.fetch(request)
@@ -214,6 +221,70 @@ export async function advanceLeague(
   } catch (err) {
     return failed(err, "advance league")
   }
+}
+
+// --- Site status (the sidebar tag) -----------------------------------------------------------
+
+export type SiteState = "updating" | "up-to-date" | "failed" | "unknown"
+export type SiteStatus = { state: SiteState; message: string; commit?: string; url?: string }
+
+/** How long one answer is reused for everyone (keeps GitHub API use low). */
+const STATUS_CACHE_SECONDS = 20
+/** A just-pushed commit whose checks haven't been created yet still counts as updating. */
+const NEW_COMMIT_GRACE_MS = 2 * 60 * 1000
+
+/**
+ * Status of the deploy branch from GitHub: the checks on the latest commits (GitHub Actions
+ * runs, and the Cloudflare build, which reports back to GitHub). The previous commit counts
+ * too, because a "[skip ci]" standings commit can land while the commit before it is building.
+ */
+export async function siteStatus(gh: GitHub, now = Date.now()): Promise<SiteStatus> {
+  const commits = await gh.recentCommits(2)
+  if (!commits.length) return { state: "unknown", message: "Site status unavailable" }
+  const checks = await Promise.all(commits.map((c) => gh.checks(c.sha)))
+  const title = (message: string) => message.split("\n")[0]
+
+  for (let i = 0; i < commits.length; i++) {
+    const running = checks[i].find((c) => c.status !== "completed")
+    if (running) {
+      return { state: "updating", message: title(commits[i].message), commit: commits[i].sha, url: running.url }
+    }
+  }
+  const latest = commits[0]
+  if (!checks[0].length && !/\[skip ci\]/i.test(latest.message) && now - Date.parse(latest.date) < NEW_COMMIT_GRACE_MS) {
+    return { state: "updating", message: title(latest.message), commit: latest.sha }
+  }
+  // the newest commit that has checks decides whether the last update worked
+  const decided = checks.findIndex((c) => c.length > 0)
+  const failure = decided >= 0 ? checks[decided].find((c) => FAILED.has(c.conclusion ?? "")) : undefined
+  if (failure) {
+    return { state: "failed", message: title(commits[decided].message), commit: commits[decided].sha, url: failure.url }
+  }
+  return { state: "up-to-date", message: title(latest.message), commit: latest.sha }
+}
+
+/** Conclusions that mean the update didn't work ("cancelled" is usually a newer run taking over). */
+const FAILED = new Set(["failure", "timed_out", "action_required", "startup_failure", "error"])
+
+/** GET /api/status, shared by every visitor for a few seconds via the Workers cache. */
+async function cachedSiteStatus(request: Request, env: Env, gh = github(env)): Promise<Response> {
+  const cache = (globalThis as { caches?: { default?: Cache } }).caches?.default
+  const key = new Request(new URL("/api/status", request.url).toString())
+  const hit = cache && (await cache.match(key))
+  if (hit) return hit
+  let body: SiteStatus
+  try {
+    if (!env.GITHUB_TOKEN) throw new Error("GITHUB_TOKEN secret is not set")
+    body = await siteStatus(gh)
+  } catch (err) {
+    console.error("site status failed:", err)
+    body = { state: "unknown", message: "Site status unavailable" }
+  }
+  const res = new Response(JSON.stringify(body), {
+    headers: { "Content-Type": "application/json", "Cache-Control": `public, max-age=${STATUS_CACHE_SECONDS}` },
+  })
+  if (cache) await cache.put(key, res.clone())
+  return res
 }
 
 /** Seasons compare ignoring case and extra spaces. */
@@ -464,6 +535,13 @@ export type GitHub = {
   putFile(path: string, content: string, branch: string, message: string): Promise<void>
   /** Open a pull request into the deploy branch; returns its URL. */
   openPullRequest(branch: string, title: string, body: string): Promise<string>
+  /** The newest commits on the deploy branch, newest first. */
+  recentCommits(count: number): Promise<{ sha: string; message: string; date: string }[]>
+  /**
+   * Checks on a commit: check runs (GitHub Actions, Cloudflare's build) and commit statuses,
+   * as { status: "queued" | "in_progress" | "completed", conclusion }.
+   */
+  checks(sha: string): Promise<{ name: string; status: string; conclusion: string | null; url?: string }[]>
   /** Send a repository_dispatch event (starts workflows listening for that event type). */
   dispatch(eventType: string, payload: Record<string, unknown>): Promise<void>
 }
@@ -541,6 +619,34 @@ export function github(env: Env, fetchImpl: typeof fetch = fetch): GitHub {
         branch,
       })
       if (!res.ok) await fail(`write ${path}`, res)
+    },
+    async recentCommits(count) {
+      const res = await api("GET", `/commits?sha=${encodeURIComponent(env.GITHUB_BRANCH)}&per_page=${count}`)
+      if (!res.ok) await fail("list commits", res)
+      const data = (await res.json()) as { sha: string; commit: { message: string; committer: { date: string } } }[]
+      return data.map((c) => ({ sha: c.sha, message: c.commit.message, date: c.commit.committer.date }))
+    },
+    async checks(sha) {
+      // fine-grained token: needs Checks read and Commit statuses read (unless the repo is public)
+      const [runs, statuses] = await Promise.all([
+        api("GET", `/commits/${sha}/check-runs?per_page=100`),
+        api("GET", `/commits/${sha}/status`),
+      ])
+      if (!runs.ok) await fail(`check runs for ${sha}`, runs)
+      if (!statuses.ok) await fail(`statuses for ${sha}`, statuses)
+      const r = (await runs.json()) as {
+        check_runs: { name: string; status: string; conclusion: string | null; html_url?: string }[]
+      }
+      const st = (await statuses.json()) as { statuses: { context: string; state: string; target_url?: string }[] }
+      return [
+        ...r.check_runs.map((c) => ({ name: c.name, status: c.status, conclusion: c.conclusion, url: c.html_url })),
+        ...st.statuses.map((c) => ({
+          name: c.context,
+          status: c.state === "pending" ? "in_progress" : "completed",
+          conclusion: c.state === "pending" ? null : c.state,
+          url: c.target_url,
+        })),
+      ]
     },
     async dispatch(eventType, payload) {
       // fine-grained token: needs Contents read/write (already required for registrations)

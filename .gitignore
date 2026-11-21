@@ -15,6 +15,7 @@ replit.nix
 .quartz/plugins/*
 !.quartz/plugins/league-registration
 !.quartz/plugins/league-controls
+!.quartz/plugins/site-status
 quartz/cli/tui/dist/
 .turbo/
 .wrangler/

@@ -1,0 +1,38 @@
+{
+  "name": "site-status",
+  "version": "0.1.0",
+  "description": "A small sidebar tag saying whether the site is updating or up-to-date (from the Worker's /api/status).",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./components": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/components/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "quartz": {
+    "name": "site-status",
+    "displayName": "Site Status",
+    "description": "Sidebar tag: 'Site is updating' / 'Site is up-to-date'",
+    "category": "component",
+    "quartzVersion": ">=5.1.0",
+    "dependencies": [],
+    "defaultOrder": 40,
+    "defaultEnabled": true,
+    "defaultOptions": {},
+    "components": {
+      "SiteStatus": {
+        "displayName": "Site Status",
+        "defaultPosition": "left",
+        "defaultPriority": 40
+      }
+    }
+  },
+  "types": "./dist/index.d.ts"
+}
